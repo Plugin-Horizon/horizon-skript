@@ -1,8 +1,8 @@
 # horizon-skript
 
-> **Unofficial Rust port of Skript for the Horizon server (https://github.com/horizon-rust/horizon). Not affiliated with or endorsed by the Skript authors.**
+> **Unofficial Rust port of Skript for the Horizon server (https://github.com/arismoko/horizon). Not affiliated with or endorsed by the Skript authors.**
 
-The Skript scripting language for [Horizon](https://github.com/horizon-rust/horizon) servers, as a
+The Skript scripting language for [Horizon](https://github.com/arismoko/horizon) servers, as a
 native trait mod: `.sk` files in a scripts folder, Skript's indentation and sections, its pattern
 syntax for statements and expressions, variables and lists, functions, `wait`, events, commands and
 the `/skript` command, with the same error messages and line numbers.
@@ -13,11 +13,18 @@ the structures (`on`, `command`, `function`, `options`, `if`/`else`, `loop`, `wh
 names of its syntax. The licence of this mod is therefore the GNU General Public License version 3
 or later (see LICENSE); the copyright holders are in NOTICE.
 
-**State: the language core is built and tested (125 tests in `core/`). The glue (`api/`) builds against
-Horizon `1453e0e61`; it has not run inside a Horizon server yet (see STATUS.md and GAPS.md).**
-
 Upstream: Skript (https://github.com/SkriptLang/Skript), commit `19172ca06e798dea53d97b647167e6ebe7f5fe94`
 ("Prepare For Release (2.17.1)"), GPL-3.0. Horizon pin: `1453e0e614af4b2d04dd0d228a94162b5d459910`.
+
+> **Built for and working only with [arismoko/horizon](https://github.com/arismoko/horizon)** (the Horizon fork that carries the mod API). [horizon-rust/horizon](https://github.com/horizon-rust/horizon) is experimental for mods and not supported: the earlier version for its native hooks / horizon-mixins is frozen on the `horizon-plain` branch (work stopped on 2026-11-12).
+
+## Which Horizon
+
+This is a native trait mod: `horizon-mod.toml`, a `Cargo.toml` that depends on `horizon-mod-api`, `src/lib.rs` with the hooks, and the plugin logic in the `core/` crate (plain Rust, no engine needed for its tests).
+
+- Pin: `[native] horizon = "54090ee36c4e2c7b43b66db864220c577b94b7e0"` in `horizon-mod.toml` (game `26.3`). That is a development build of arismoko/horizon `main` plus mod API additions that are not all merged upstream yet, so a stock `main` may lack some host methods this mod calls until they land.
+- It compiled and loaded on that build and was smoke-tested there; it has not seen a long run with real players. Treat it as experimental.
+- Feature descriptions below were written for the earlier horizon-rust version; where they name engine calls (`native_*`) or old file paths, read them as descriptions only. The Known gaps list is current.
 
 ## What works
 
@@ -40,7 +47,7 @@ Upstream: Skript (https://github.com/SkriptLang/Skript), commit `19172ca06e798de
 - Waits and repeats run on server ticks. A tick runs at most 100 000 statements in total; the
   runs that do not fit go on on the next tick, so a loop cannot stall the server.
 
-What is missing (most of Skript's syntax) is in STATUS.md. Writing the rest is the job of the
+What is missing (most of Skript's syntax) is in the Known gaps section. Writing the rest is the job of the
 syntax library in `core/src/syntax/` (see its README).
 
 ## Example
@@ -60,23 +67,24 @@ function double(n: integer) :: integer:
 	return {_n} * 2
 ```
 
-## Layout
+## Build
 
-- `core/` — the language, engine-free (`cargo test` here). `src/pattern.rs` is the pattern engine,
-  `expr.rs` expressions, `parse.rs` statements and triggers, `run.rs` the interpreter,
-  `manager.rs` the script manager, `classes.rs` the types, `builtins.rs` the builtin syntax,
-  `syntax/` the syntax library (to be filled).
-- `api/` — the trait mod: the hook glue (`api/src/lib.rs`).
-- `horizon-mixin.toml` — the mod's manifest; `STATUS.md`, `GAPS.md` — what is done and what the
-  engine lacks.
-
-## Building and testing the core
+Build it as a native trait mod with arismoko's launcher (see the "native mods" how-to in the arismoko/horizon docs):
 
 ```sh
-(cd core && cargo test)
+horizon-launcher native-build <path to this folder> --server-output <dir> --version <tag> --trust-native-code
 ```
 
-CI runs exactly that. The glue depends on the Horizon engine and is not built by CI.
+`--trust-native-code` is your consent to compile and run this code inside the server. The logic crate tests run without the engine: `(cd core && cargo test)`.
+
+## Known gaps
+
+What does not work yet on arismoko/horizon (each is marked `TODO(arismoko-api: ...)` in `src/lib.rs`):
+
+- `chat_as`, `place` triggers, player-move triggers, run-command-as-player and forced particle drawing have no arismoko API yet and are refused or approximated.
+- A stack's custom name is not read, `has played before` is approximated, and titles go through the vanilla `title` command.
+- `set block` by name needs the block's default state; `summon` with NBT, hiding effect particles and the respawn point use workarounds or are missing.
+- Particle names are limited to a fixed list of about 50.
 
 ## Licence
 
