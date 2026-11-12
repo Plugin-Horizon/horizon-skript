@@ -2,7 +2,7 @@ id = "skript"
 name = "Skript"
 version = "0.1.0"
 description = "The Skript language: .sk scripts with Skript's syntax, events, commands and functions, run by the horizon-skript core."
-authors = ["CoreSMP"]
+authors = ["Plugin-Horizon contributors"]
 api = "0.2"
 capabilities = ["registries"]
 
