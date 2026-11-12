@@ -80,7 +80,7 @@ impl<'a> Bridge<'a> {
     }
 
     /// The dimension a world name stands for: the open world's folder is the overworld, whatever
-    /// its name (`stage` on rec_lobby); the Bukkit folders of nether and end. `None` otherwise.
+    /// its name (`stage` on a lobby); the Bukkit folders of nether and end. `None` otherwise.
     fn dimension_of(&self, world: &str) -> Option<&'static str> {
         if world == self.level_name {
             Some("minecraft:overworld")

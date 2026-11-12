@@ -181,7 +181,7 @@ mod tests {
         assert_eq!(value_text(&Value::World("stage".into())), "stage");
     }
 
-    /// rec_lobby_winter's winter_breath.sk moves a location variable by its coordinates.
+    /// A seasonal lobby script moves a location variable by its coordinates.
     #[test]
     fn coordinates_of_a_location_variable_change() {
         let h = Recorder::default();

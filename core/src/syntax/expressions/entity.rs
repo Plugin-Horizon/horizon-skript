@@ -282,7 +282,7 @@ mod tests {
         );
     }
 
-    /// rec_lobby_winter's winter_cosmetics.sk: the hat is put on where it is missing, and a
+    /// A seasonal lobby script: the hat is put on where it is missing, and a
     /// plain carved pumpkin is not the named hat.
     #[test]
     fn the_winter_hat_goes_only_where_it_is_missing() {
