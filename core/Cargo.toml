@@ -1,0 +1,15 @@
+# The engine-free language core of the port: parser, pattern matcher, expressions, runtime and
+# the script manager. Built and tested on its own with `cargo test` here; the trait mod in api/
+# is the only part that needs the Horizon engine.
+[package]
+name = "horizon-skript-core"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+regex = "=1.13.1"
