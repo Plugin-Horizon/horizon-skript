@@ -1,0 +1,14 @@
+horizon-skript
+
+This mod is a port of Skript (https://github.com/SkriptLang/Skript), the scripting language for
+Minecraft servers, and is distributed under the GNU General Public License, version 3 or (at your
+option) any later version (see LICENSE).
+
+Copyright (C) Peter Güttinger, SkriptLang team and contributors
+
+The syntax (the script structure, the patterns, the names of the expressions, effects, conditions
+and events, and their messages) follows Skript's source. Nothing of Skript's own code is copied
+without its notice; ported parts keep the notice of their original file.
+
+Modifications for Horizon (https://github.com/horizon-rust/horizon) are by Detimes and contributors.
+Not affiliated with or endorsed by the Skript authors.
