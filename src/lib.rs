@@ -19,7 +19,7 @@ use mod_api::{
     Command, CommandArgumentValue, CommandSource, Config, ConfigKind, ConfigLoadingEvent,
     ConfigReloadingEvent, EntityRef, EquipmentSlot, Flow, GameMode, Hand, Hooks, HostSide,
     Identifier, InteractionResult, ItemKey, ItemStack, LevelRandomHost, LivingDamagePreEvent, ParticleOptions,
-    PlayerLoggedInEvent, PlayerLoggedOutEvent, PlayerRef, RegisterCommandsEvent,
+    PlayerCommandsSentEvent, PlayerLoggedInEvent, PlayerLoggedOutEvent, PlayerRef, RegisterCommandsEvent,
     RunModCommandEvent, ServerAboutToStartEvent, ServerChatEvent, ServerHost, ServerStoppingEvent,
     ServerTickEvent, ServerTickPhase, StatType, Text, ParticleKey, Registrar, RegistrationContext,
 };
@@ -29,6 +29,10 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const MOD_ID: &str = "skript";
+/// plugin.yml `permission:` of /skript (and /sk), default op.
+const SKRIPT_NODE: &str = "skript.admin";
+/// Bukkit's default line for a refused command (red, two sentences).
+const NO_PERMISSION: &str = "\u{a7}cI'm sorry, but you do not have permission to perform this command. Please contact the server administrators if you believe that this is in error.";
 /// The folder scripts are read from, relative to the server's folder (Skript's own default).
 const DEFAULT_FOLDER: &str = "plugins/Skript/scripts";
 const DEFAULT_TOML: &str = "# Folder of the .sk scripts, relative to the server folder.\nscripts-folder = \"plugins/Skript/scripts\"\n";
@@ -146,6 +150,18 @@ impl SkHost for Bridge<'_> {
                 .into_iter()
                 .filter_map(|p| Some((p.uuid(), p.name(&*h)?)))
                 .collect()
+        })
+    }
+
+    // The scripts' `permission:` nodes and `player has permission`. The glue had no answer, so every
+    // node was refused, operators included. Now: the permissions mods' answer, else operator level
+    // 2. TODO(arismoko-api: LuckPerms nodes).
+    fn has_permission(&self, uuid: u128, node: &str) -> bool {
+        self.with(|h| {
+            let Some(p) = h.player(uuid) else {
+                return false;
+            };
+            p.has_permission(&*h, node)
         })
     }
 
@@ -909,8 +925,11 @@ impl Hooks for Skript {
     }
 
     fn register_commands(&self, host: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {
-        event.commands.push(Command::op("skript", 2));
-        event.commands.push(Command::op("skript <args:text>", 2));
+        // plugin.yml: `skript`, alias `sk`, permission skript.admin (default op). The node decides when a
+        // permissions mod answers; the level 2 only without one. `player_command` gives the Bukkit line.
+        for usage in ["skript", "skript <args:text>", "sk", "sk <args:text>"] {
+            event.commands.push(Command::op(usage, 2).with_node(SKRIPT_NODE));
+        }
         // The names of the scripts' `command /name:` triggers (loads the scripts on the first call).
         let names = self.with_manager(host, |_, m, _| m.command_names());
         for name in names {
@@ -943,7 +962,7 @@ impl Hooks for Skript {
             }
             _ => None,
         };
-        if root == "skript" {
+        if root == "skript" || root == "sk" {
             self.with_manager(host, |_, m, b| {
                 for line in m.skript_command(b, &args) {
                     match sender.as_ref() {
@@ -1146,12 +1165,42 @@ impl Hooks for Skript {
     // TODO(arismoko-api: player_move): no move hook on arismoko (only `vehicle_moved` and
     // `player_teleported`). Skript's `move` trigger never fires; the lobby scripts do not use it.
 
+    /// Tab: `/skript` and `/sk` only for a sender with skript.admin (Bukkit hides a command by its permission).
+    fn player_commands_sent(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut PlayerCommandsSentEvent<'_>,
+    ) {
+        let admin = host
+            .player(event.player)
+            .is_some_and(|p| p.has_permission(&*host, SKRIPT_NODE));
+        if !admin {
+            event.names.retain(|n| {
+                let lower = n.to_ascii_lowercase();
+                let bare = lower.rsplit(':').next().unwrap_or("");
+                bare != "skript" && bare != "sk"
+            });
+        }
+    }
+
     // UNVERIFIED: `player` (the UUID) and `command` (the typed line, without its slash).
     fn player_command(
         &self,
         host: &mut dyn ServerHost,
         event: &mut mod_api::PlayerCommandEvent,
     ) -> Flow {
+        // Bukkit's `permission:` check for /skript and its alias /sk: the default line, nothing runs.
+        let root = event.command.split_whitespace().next().unwrap_or("").to_ascii_lowercase();
+        if root == "skript" || root == "sk" {
+            let admin = host
+                .player(event.player)
+                .is_some_and(|p| p.has_permission(&*host, SKRIPT_NODE));
+            if !admin {
+                event.replies.push(Text::literal(NO_PERMISSION));
+                event.cancelled = true;
+                return Flow::Cancel;
+            }
+        }
         let mut data = player_event(self, event.player);
         data.message = Some(event.command.to_owned());
         fire_cancellable(self, host, &["command"], data)
