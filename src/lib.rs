@@ -8,13 +8,15 @@
 //! described in PORT_NOTES.md, which also lists the names this file had to guess (`UNVERIFIED`).
 //!
 //! Ported from the horizon-rust glue (`api/src/lib.rs` of horizon-skript at 1453e0e61).
-use horizon_skript_core::Registry;
-use horizon_skript_core::host::{
+
+pub mod horizon_skript_core;
+use crate::horizon_skript_core::Registry;
+use crate::horizon_skript_core::host::{
     Actions, EntityInfo, Host as SkHost, ItemStack as SkItemStack, ParticleSpec, PlayerState,
 };
-use horizon_skript_core::manager::Manager;
-use horizon_skript_core::run::Event;
-use horizon_skript_core::value::{Location, Value};
+use crate::horizon_skript_core::manager::Manager;
+use crate::horizon_skript_core::run::Event;
+use crate::horizon_skript_core::value::{Location, Value};
 use mod_api::{
     Command, CommandArgumentValue, CommandSource, Config, ConfigKind, ConfigLoadingEvent,
     ConfigReloadingEvent, EntityRef, EquipmentSlot, Flow, GameMode, Hand, Hooks, HostSide,
@@ -22,6 +24,7 @@ use mod_api::{
     PlayerCommandsSentEvent, PlayerLoggedInEvent, PlayerLoggedOutEvent, PlayerRef, RegisterCommandsEvent,
     RunModCommandEvent, ServerAboutToStartEvent, ServerChatEvent, ServerHost, ServerStoppingEvent,
     ServerTickEvent, ServerTickPhase, StatType, Text, ParticleKey, Registrar, RegistrationContext,
+    NodeDefault, PermissionGatherNodesEvent, PermissionLevel, PermissionNode, PermissionValueType,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -31,6 +34,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const MOD_ID: &str = "skript";
 /// plugin.yml `permission:` of /skript (and /sk), default op.
 const SKRIPT_NODE: &str = "skript.admin";
+
+/// The typed node of `/skript` and `/sk` (`skript.admin`), declared at gathering with operator level 2.
+fn skript_node() -> PermissionNode {
+    PermissionNode::new(SKRIPT_NODE, PermissionValueType::Boolean)
+}
 /// Bukkit's default line for a refused command (red, two sentences).
 const NO_PERMISSION: &str = "\u{a7}cI'm sorry, but you do not have permission to perform this command. Please contact the server administrators if you believe that this is in error.";
 /// The folder scripts are read from, relative to the server's folder (Skript's own default).
@@ -153,15 +161,20 @@ impl SkHost for Bridge<'_> {
         })
     }
 
-    // The scripts' `permission:` nodes and `player has permission`. The glue had no answer, so every
-    // node was refused, operators included. Now: the permissions mods' answer, else operator level
-    // 2. TODO(arismoko-api: LuckPerms nodes).
+    // The scripts' `permission:` nodes and `player has permission`. Script nodes are not declared at
+    // gathering (they come from the scripts at run time), so a typed query for one is refused as
+    // unregistered. HMOD-GAP(script-permission-nodes): every script permission check denies, operators
+    // included; the operator level 2 fallback is gone for these nodes.
     fn has_permission(&self, uuid: u128, node: &str) -> bool {
         self.with(|h| {
             let Some(p) = h.player(uuid) else {
                 return false;
             };
-            p.has_permission(&*h, node)
+            p.permission_bool(
+                h,
+                &PermissionNode::new(node, PermissionValueType::Boolean),
+            )
+            .unwrap_or(false)
         })
     }
 
@@ -189,7 +202,7 @@ impl SkHost for Bridge<'_> {
             };
             let mut out = Vec::new();
             for e in level.all_entities(&*h).unwrap_or_default() {
-                let (Some(kind), Some(at)) = (e.kind(&*h), e.position(&*h)) else {
+                let (Some(kind), Some(at)) = (e.kind(&*h).map(|k| k.id(&*h)), e.position(&*h)) else {
                     continue;
                 };
                 let Some(uuid) = e.uuid(h) else {
@@ -620,15 +633,12 @@ impl Actions for Bridge<'_> {
                     let Some(key) = h.item_key(&id) else {
                         return false;
                     };
-                    let Some(mut stack) = ItemStack::new(key, 1) else {
+                    let Some(stack) = ItemStack::new(key, 1) else {
                         return false;
                     };
-                    if let Some(n) = name {
-                        let n = Text::literal(n);
-                        if stack.set_display(&*h, Some(&n), &[]).is_err() {
-                            return false;
-                        }
-                    }
+                    // HMOD-GAP(item-display): main has no ItemStack setter for a custom name, so a living
+                    // entity's equipment gets the bare item (the name is not set).
+                    let _ = name;
                     Some(stack)
                 }
             };
@@ -924,11 +934,19 @@ impl Hooks for Skript {
         self.with_manager(host, |_, m, b| m.fire(b, "server stop", Event::default()));
     }
 
+    /// Declares `skript.admin` (plugin.yml default op: operator level 2 without a permission provider's answer).
+    fn permission_gather_nodes(&self, event: &mut PermissionGatherNodesEvent<'_>) {
+        let _ = event.nodes.add(
+            skript_node(),
+            NodeDefault::Level(PermissionLevel::from_level(2)),
+        );
+    }
+
     fn register_commands(&self, host: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {
         // plugin.yml: `skript`, alias `sk`, permission skript.admin (default op). The node decides when a
         // permissions mod answers; the level 2 only without one. `player_command` gives the Bukkit line.
         for usage in ["skript", "skript <args:text>", "sk", "sk <args:text>"] {
-            event.commands.push(Command::op(usage, 2).with_node(SKRIPT_NODE));
+            event.commands.push(Command::op(usage, 2).with_node(&skript_node()));
         }
         // The names of the scripts' `command /name:` triggers (loads the scripts on the first call).
         let names = self.with_manager(host, |_, m, _| m.command_names());
@@ -1171,9 +1189,10 @@ impl Hooks for Skript {
         host: &mut dyn ServerHost,
         event: &mut PlayerCommandsSentEvent<'_>,
     ) {
-        let admin = host
-            .player(event.player)
-            .is_some_and(|p| p.has_permission(&*host, SKRIPT_NODE));
+        let admin = match host.player(event.player) {
+            Some(p) => p.permission_bool(host, &skript_node()).unwrap_or(false),
+            None => false,
+        };
         if !admin {
             event.names.retain(|n| {
                 let lower = n.to_ascii_lowercase();
@@ -1192,9 +1211,10 @@ impl Hooks for Skript {
         // Bukkit's `permission:` check for /skript and its alias /sk: the default line, nothing runs.
         let root = event.command.split_whitespace().next().unwrap_or("").to_ascii_lowercase();
         if root == "skript" || root == "sk" {
-            let admin = host
-                .player(event.player)
-                .is_some_and(|p| p.has_permission(&*host, SKRIPT_NODE));
+            let admin = match host.player(event.player) {
+                Some(p) => p.permission_bool(host, &skript_node()).unwrap_or(false),
+                None => false,
+            };
             if !admin {
                 event.replies.push(Text::literal(NO_PERMISSION));
                 event.cancelled = true;
