@@ -10,5 +10,5 @@ The syntax (the script structure, the patterns, the names of the expressions, ef
 and events, and their messages) follows Skript's source. Nothing of Skript's own code is copied
 without its notice; ported parts keep the notice of their original file.
 
-Modifications for Horizon (https://github.com/horizon-rust/horizon) are by Detimes and contributors.
+Modifications for Horizon (https://github.com/horizon-rust/horizon) are by LionSpacer.
 Not affiliated with or endorsed by the Skript authors.
