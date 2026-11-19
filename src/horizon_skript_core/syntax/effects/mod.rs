@@ -12,6 +12,7 @@ mod entities;
 mod items;
 mod messages;
 mod particles;
+mod player_state;
 mod players;
 mod world;
 
@@ -30,6 +31,7 @@ pub fn register(reg: &mut Registry) -> Result<(), PatternError> {
     particles::register(reg)?;
     entities::register(reg)?;
     console::register(reg)?;
+    player_state::register(reg)?;
     Ok(())
 }
 
@@ -114,6 +116,42 @@ fn console(cx: &mut Ctx<'_>, line: &str) {
 /// A `Flow::Next`, the result of every effect here.
 fn next() -> Result<Flow, RunError> {
     Ok(Flow::Next)
+}
+
+/// A player state for the tests of the effect families.
+#[cfg(test)]
+pub(super) mod fixtures {
+    use crate::horizon_skript_core::host::PlayerState;
+    use crate::horizon_skript_core::value::Location;
+
+    /// A survival player at 0, 64, 0 in `world` with full health and food, nothing in hand.
+    pub fn state() -> PlayerState {
+        PlayerState {
+            name: "Alice".into(),
+            display_name: "Alice".into(),
+            location: Location {
+                world: "world".into(),
+                x: 0.0,
+                y: 64.0,
+                z: 0.0,
+                yaw: 0.0,
+                pitch: 0.0,
+            },
+            health: 20.0,
+            max_health: 20.0,
+            food: 20,
+            level: 0,
+            gamemode: "survival".into(),
+            flying: false,
+            can_fly: false,
+            sneaking: false,
+            sprinting: false,
+            swimming: false,
+            op: false,
+            held: "minecraft:air".into(),
+            inventory: Vec::new(),
+        }
+    }
 }
 
 #[cfg(test)]
