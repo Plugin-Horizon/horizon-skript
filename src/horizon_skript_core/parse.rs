@@ -890,7 +890,7 @@ pub fn parse_command_header(rest: &str) -> Result<(String, Vec<HeaderPart>, Stri
             let mut depth = 0usize;
             let mut end = None;
             for (k, ch) in chars.iter().enumerate().skip(i) {
-                match ch {
+                match *ch {
                     '[' => depth += 1,
                     ']' => {
                         depth -= 1;
