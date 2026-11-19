@@ -268,6 +268,8 @@ pub struct Parser<'a> {
     memo: RefCell<HashMap<(String, String), Option<Expr>>>,
     /// Second pass only: read a bare word in an untyped slot as an item type (`x is air`).
     items_in_objects: Cell<bool>,
+    /// `aliases:` of the file: a lower-case name and the item text it stands for.
+    aliases: RefCell<HashMap<String, String>>,
 }
 
 impl<'a> Parser<'a> {
@@ -278,7 +280,36 @@ impl<'a> Parser<'a> {
             depth: Cell::new(0),
             memo: RefCell::new(HashMap::new()),
             items_in_objects: Cell::new(false),
+            aliases: RefCell::new(HashMap::new()),
         }
+    }
+
+    /// Lets the file name an item type `name` (an `aliases:` line `name = item`).
+    pub fn set_alias(&self, name: &str, target: &str) {
+        self.aliases
+            .borrow_mut()
+            .insert(name.trim().to_ascii_lowercase(), target.trim().to_owned());
+        self.memo.borrow_mut().clear();
+    }
+
+    /// `3 blood` is `3 red dye` when the file defines `blood = red dye`; other text is unchanged.
+    fn alias_text(&self, t: &str) -> String {
+        let aliases = self.aliases.borrow();
+        if aliases.is_empty() {
+            return t.to_owned();
+        }
+        let lower = t.trim().to_ascii_lowercase();
+        if let Some(target) = aliases.get(&lower) {
+            return target.clone();
+        }
+        if let Some((amount, rest)) = lower.split_once(' ') {
+            if amount.chars().all(|c| c.is_ascii_digit()) {
+                if let Some(target) = aliases.get(rest.trim()) {
+                    return format!("{amount} {target}");
+                }
+            }
+        }
+        t.to_owned()
     }
 
     /// Runs `f` with bare words in untyped slots read as item types. Statements try this only
@@ -555,7 +586,12 @@ impl<'a> Parser<'a> {
             match *h {
                 "player" if is_player_name(t) => return Some(Expr::PlayerName(t.to_owned())),
                 "item type" | "entity type" | "world" => {
-                    if let Some(v) = classes::parse_value(h, t, self.host) {
+                    let text = if *h == "item type" {
+                        self.alias_text(t)
+                    } else {
+                        t.to_owned()
+                    };
+                    if let Some(v) = classes::parse_value(h, &text, self.host) {
                         return Some(Expr::Lit(v));
                     }
                 }
@@ -563,7 +599,8 @@ impl<'a> Parser<'a> {
                 // a bare word there as an item type when one has that name. Only words, so
                 // keywords of other syntax (`is set`) are taken by their own pattern first.
                 "object" if self.items_in_objects.get() && is_item_words(t) => {
-                    if let Some(v) = classes::parse_value("item type", &item_alias(t), self.host) {
+                    let text = self.alias_text(&item_alias(t));
+                    if let Some(v) = classes::parse_value("item type", &text, self.host) {
                         return Some(Expr::Lit(v));
                     }
                 }

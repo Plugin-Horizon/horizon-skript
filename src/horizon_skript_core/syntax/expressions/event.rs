@@ -12,6 +12,8 @@ use crate::horizon_skript_core::value::Value;
 fn event_value(cx: &mut Ctx<'_>, name: &str) -> Result<Value, RunError> {
     let v = if name == "player" {
         cx.event.player.clone()
+    } else if name == "message" {
+        cx.event.message_now().map(Value::Text)
     } else {
         cx.event.value(name).cloned()
     };

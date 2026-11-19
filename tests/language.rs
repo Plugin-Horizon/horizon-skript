@@ -484,7 +484,9 @@ fn skript_command_lists_enables_and_disables() {
             .count(),
         1
     );
-    assert!(m.skript_command(&host, "enable nope")[0].contains("No script named nope"));
+    let missing = m.skript_command(&host, "enable nope");
+    assert!(missing[0].contains("Can't find the script"), "{missing:?}");
+    assert!(missing[0].contains("nope"), "{missing:?}");
 
     fs::write(dir.join("a.sk"), "on load:\n\tbroadcast \"a again\"\n").unwrap();
     m.skript_command(&host, "reload a");

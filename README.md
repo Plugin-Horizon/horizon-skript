@@ -42,8 +42,19 @@ This is a native trait mod: `horizon-mod.toml`, a `Cargo.toml` that depends on `
   entity type.
 - Variables: `{name}`, `{name::sub}`, `{_local}`, list variables with indices, `loop-value` and
   `loop-index` inside loops, `arg-1` in commands, `player` and `message` in events.
-- `/skript info`, `/skript list`, `/skript reload [name|all]`, `/skript enable <name>`,
-  `/skript disable <name>` (in game for operators, or from the console).
+- Commands: `command /name <text> [<number=1>] word:` with typed, optional, defaulted and named
+  (`<who: player>` is `{_who}`) arguments, `arg-1`, `arg-text`, `number-arg 2`, `last arg`, the last text
+  argument taking the rest of the line, a usage line for a wrong line, `aliases`, `executable by`
+  (players, console, operators), `permission` and `permission message`, `cooldown` with its message and
+  bypass. Scripts commands run for players and from the console.
+- Structures: `options`, `variables` (defaults for unset variables), `aliases` (`name = item`), `function` and
+  `local function`, `on <event> with priority <p>`, `using <experiment>` (accepted, no effect), `every`.
+  A trigger or function with a problem is reported and left out; the rest of the file loads.
+- `/skript help|info|list|reload [all|scripts|config|aliases|last|<script or folder>]|enable|disable
+  [all|<script or folder>]` with Tab completion (in game for operators, or from the console). Players with
+  `skript.reloadnotify` see the lines of a reload, enable or disable. A reload that adds or removes commands
+  refreshes the command tree.
+- `on chat`: `cancel event` stops the message, `set message to ...` changes it.
 - Waits and repeats run on server ticks. A tick runs at most 100 000 statements in total; the
   runs that do not fit go on on the next tick, so a loop cannot stall the server.
 
@@ -82,7 +93,10 @@ horizon-launcher native-build <path to this folder> --server-output <dir> --vers
 What does not work yet on arismoko/horizon (each is marked `TODO(arismoko-api: ...)` in `src/lib.rs`):
 
 - `chat_as`, `place` triggers, player-move triggers, run-command-as-player and forced particle drawing have no arismoko API yet and are refused or approximated.
-- A stack's custom name is not read, `has played before` is approximated, and titles go through the vanilla `title` command.
+- `cancel event` in `on damage` cannot stop the hit (the damage hook has a level host that cannot run the scripts; HMOD-GAP(damage-cancel)).
+- A stack's custom name is not read, `has played before` is approximated (no join-history call on main), and titles go through the vanilla `title` command.
+- Script commands have no native argument parsing: the line is parsed by the mod, so there is no client-side completion or `player` selectors for their arguments. `prefix:`, `cooldown storage:`, `suggestions:` and `subcommand` entries of a command are read but not used; `every day at 12:00` and `every <realtime>` are not parsed.
+- About 800 syntax classes of Skript 2.17.1 are missing (most effects, conditions, expressions, events and types); see the audit list.
 - `set block` by name needs the block's default state; `summon` with NBT, hiding effect particles and the respawn point use workarounds or are missing.
 - Particle names are limited to a fixed list of about 50.
 

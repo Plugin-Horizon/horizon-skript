@@ -58,8 +58,26 @@ pub fn register(reg: &mut Registry) -> Result<(), PatternError> {
     )?;
 
     reg.add_expression("player", &["[the] player"], 0, "player", event_player)?;
-    reg.add_expression("message", &["[the] message"], 0, "text", event_message)?;
-    reg.add_expression("arg", &["arg-%integer%"], 0, "text", event_arg)?;
+    reg.add_expression("message", &["[the] message"], 0, "text", EventMessage)?;
+    reg.add_expression(
+        "arg",
+        &["arg-%integer%", "[the] arg[ument]<[- ]([0-9]+)>"],
+        0,
+        "object",
+        event_arg,
+    )?;
+    reg.add_expression("last arg", &["[the] last arg[ument]"], 0, "object", last_arg)?;
+    reg.add_expression(
+        "typed arg",
+        &[
+            "[the] arg[ument]<[- ](text|string|number|integer|boolean|player|world|location)>[<[- ]([0-9]+)>]",
+            "[the] <(text|string|number|integer|boolean|player|world|location)>-arg[ument][<[- ]([0-9]+)>]",
+            "[the] <(text|string|number|integer|boolean|player|world|location)> arg[ument][<[- ]([0-9]+)>]",
+        ],
+        0,
+        "object",
+        typed_arg,
+    )?;
     reg.add_expression("loop-value", &["loop-value"], 0, "object", loop_value)?;
     reg.add_expression("loop-index", &["loop-index"], 0, "integer", loop_index)?;
     reg.add_expression("loop-number", &["loop-number"], 0, "object", loop_number)?;
@@ -330,26 +348,87 @@ fn event_player(cx: &mut Ctx<'_>, _: &Matched) -> Result<Value, RunError> {
         .ok_or_else(|| RunError::new("there is no player in this event"))
 }
 
-fn event_message(cx: &mut Ctx<'_>, _: &Matched) -> Result<Value, RunError> {
-    cx.event
-        .message
-        .clone()
-        .map(Value::Text)
-        .ok_or_else(|| RunError::new("there is no message in this event"))
+/// `message`: the chat line (or the command), and changeable with `set message to ...`.
+struct EventMessage;
+
+impl ExprSyntax for EventMessage {
+    fn eval(&self, cx: &mut Ctx<'_>, _: &Matched) -> Result<Value, RunError> {
+        cx.event
+            .message_now()
+            .map(Value::Text)
+            .ok_or_else(|| RunError::new("there is no message in this event"))
+    }
+
+    fn change(
+        &self,
+        cx: &mut Ctx<'_>,
+        _: &Matched,
+        how: Change,
+        by: &Value,
+    ) -> Option<Result<(), RunError>> {
+        if how != Change::Set {
+            return None;
+        }
+        if cx.event.message.is_none() {
+            return Some(Err(RunError::new("there is no message in this event")));
+        }
+        cx.event.set_message(by.to_text());
+        Some(Ok(()))
+    }
+}
+
+/// The value of the `idx`th (0-based) command argument: the typed one the header gave, else the
+/// plain text word an event fired without a header carries. Unset when there is none.
+fn arg_value(cx: &Ctx<'_>, idx: usize) -> Value {
+    match cx.event.cmd_args.get(idx) {
+        Some(a) => a.value.clone().unwrap_or(Value::Null),
+        None => cx
+            .event
+            .args
+            .get(idx)
+            .cloned()
+            .map_or(Value::Null, Value::Text),
+    }
 }
 
 fn event_arg(cx: &mut Ctx<'_>, m: &Matched) -> Result<Value, RunError> {
+    let n = match m.regex(0) {
+        Some(t) => t.parse::<i64>().ok(),
+        None => m
+            .expr(0)
+            .map(|e| e.eval(cx))
+            .transpose()?
+            .and_then(|v| v.as_i64()),
+    }
+    .ok_or_else(|| RunError::new("arg needs a number"))?;
+    Ok(usize::try_from(n - 1).map_or(Value::Null, |i| arg_value(cx, i)))
+}
+
+fn last_arg(cx: &mut Ctx<'_>, _: &Matched) -> Result<Value, RunError> {
+    let count = cx.event.cmd_args.len().max(cx.event.args.len());
+    Ok(count
+        .checked_sub(1)
+        .map_or(Value::Null, |i| arg_value(cx, i)))
+}
+
+/// `arg-text`, `number-arg`, `player arg 2`: the `n`th argument (the first without `n`) of that type.
+fn typed_arg(cx: &mut Ctx<'_>, m: &Matched) -> Result<Value, RunError> {
+    let class = match m.regex(0).unwrap_or_default() {
+        "string" => "text",
+        other => other,
+    };
     let n = m
-        .expr(0)
-        .map(|e| e.eval(cx))
-        .transpose()?
-        .and_then(|v| v.as_i64())
-        .ok_or_else(|| RunError::new("arg needs a number"))?;
-    usize::try_from(n - 1)
-        .ok()
-        .and_then(|i| cx.event.args.get(i).cloned())
-        .map(Value::Text)
-        .ok_or_else(|| RunError::new(format!("there is no argument {n}")))
+        .regex(1)
+        .and_then(|t| t.parse::<usize>().ok())
+        .unwrap_or(1);
+    Ok(cx
+        .event
+        .cmd_args
+        .iter()
+        .filter(|a| a.class == class)
+        .nth(n.saturating_sub(1))
+        .and_then(|a| a.value.clone())
+        .unwrap_or(Value::Null))
 }
 
 fn loop_value(cx: &mut Ctx<'_>, _: &Matched) -> Result<Value, RunError> {

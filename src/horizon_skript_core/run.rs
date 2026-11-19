@@ -10,8 +10,8 @@ use crate::horizon_skript_core::registry::Flow;
 use crate::horizon_skript_core::value::Value;
 use crate::horizon_skript_core::vars::Variables;
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 /// Script functions by lower-case name.
 pub type Functions = HashMap<String, Arc<Function>>;
@@ -29,6 +29,19 @@ pub struct Event {
     pub values: Vec<(&'static str, Value)>,
     /// The cancel flag, shared by the clones of the event. Use [`Event::cancel`].
     pub cancelled: Arc<AtomicBool>,
+    /// The typed arguments of a script command, in header order. Empty for other events.
+    pub cmd_args: Vec<CmdArg>,
+    /// The message a trigger set (`set message to ...`), shared by the clones of the event.
+    pub new_message: Arc<Mutex<Option<String>>>,
+}
+
+/// One argument of a script command as the header declared it, with the value the line gave.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CmdArg {
+    pub name: Option<String>,
+    pub class: &'static str,
+    /// `None` for an optional argument that was left out and has no default.
+    pub value: Option<Value>,
 }
 
 impl Event {
@@ -57,6 +70,21 @@ impl Event {
     /// Whether a trigger cancelled the event.
     pub fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::SeqCst)
+    }
+
+    /// The message a trigger set with `set message to ...`, if one did.
+    pub fn changed_message(&self) -> Option<String> {
+        self.new_message.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Sets the message (`set message to ...`); [`Event::message_now`] reads it.
+    pub fn set_message(&self, text: String) {
+        *self.new_message.lock().unwrap_or_else(|e| e.into_inner()) = Some(text);
+    }
+
+    /// The message as a trigger sees it now: the one it set, else the one the event came with.
+    pub fn message_now(&self) -> Option<String> {
+        self.changed_message().or_else(|| self.message.clone())
     }
 }
 

@@ -23,7 +23,7 @@ use mod_api::{
     Identifier, InteractionResult, ItemKey, ItemStack, LevelRandomHost, LivingDamagePreEvent, ParticleOptions,
     PlayerCommandsSentEvent, PlayerLoggedInEvent, PlayerLoggedOutEvent, PlayerRef, RegisterCommandsEvent,
     RunModCommandEvent, ServerAboutToStartEvent, ServerChatEvent, ServerHost, ServerStoppingEvent,
-    ServerTickEvent, ServerTickPhase, StatType, Text, ParticleKey, Registrar, RegistrationContext,
+    ServerTickEvent, ServerTickPhase, StatType, Suggestion, TabCompleteEvent, Text, ParticleKey, Registrar, RegistrationContext,
     NodeDefault, PermissionError, PermissionGatherNodesEvent, PermissionLevel, PermissionNode,
     PermissionValueType,
 };
@@ -70,11 +70,9 @@ struct State {
     /// `level-name` of server.properties: the folder of the open world (the overworld).
     level_name: String,
     manager: Option<Manager>,
-    /// Chat lines heard in `server_chat`, fired as `chat` events on the next tick: the hook may
-    /// answer, but the scripts run from the tick like the other queued events.
-    chats: Vec<(u128, String)>,
-    /// Events heard in hooks that have no host (damage): fired on the next tick. They cannot be
-    /// cancelled.
+    /// Events heard in hooks that have no server host (damage): fired on the next tick.
+    /// HMOD-GAP(damage-cancel): the hook only has a level host, which cannot run the scripts, so
+    /// `cancel event` on `on damage` cannot stop the hit.
     queued: Vec<(&'static str, Event)>,
     names: HashMap<u128, String>,
 }
@@ -802,6 +800,16 @@ fn json_text(s: &str) -> String {
 }
 
 /// The level name from server.properties (`level-name`), `world` when missing.
+/// Whether a script command's name can be registered: lower-case letters, digits, `_` and `-`.
+fn is_command_label(label: &str) -> bool {
+    !label.is_empty()
+        && label != "skript"
+        && label != "sk"
+        && label
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+}
+
 fn level_name_from_properties(text: &str) -> String {
     text.lines()
         .filter_map(|line| line.trim().strip_prefix("level-name="))
@@ -970,19 +978,26 @@ impl Hooks for Skript {
         for usage in ["skript", "skript <args:text>", "sk", "sk <args:text>"] {
             event.commands.push(Command::op(usage, 2).with_node(&skript_node()));
         }
-        // The names of the scripts' `command /name:` triggers (loads the scripts on the first call).
-        let names = self.with_manager(host, |_, m, _| m.command_names());
-        for name in names {
-            event.commands.push(Command::new(&name));
-            event
-                .commands
-                .push(Command::new(&format!("{name} <args:text>")));
+        // The scripts' `command /name:` triggers and their aliases (loads the scripts on the first call).
+        let infos = self.with_manager(host, |_, m, _| m.command_infos());
+        let mut seen = std::collections::HashSet::new();
+        for (name, info) in infos {
+            for label in std::iter::once(name).chain(info.aliases) {
+                if !is_command_label(&label) || !seen.insert(label.clone()) {
+                    continue;
+                }
+                event.commands.push(Command::new(&label));
+                event
+                    .commands
+                    .push(Command::new(&format!("{label} <args:text>")));
+            }
         }
     }
 
     // Registered commands reach this hook after the permission check and the argument parse.
-    // `/skript` runs for the console and for players; a script command runs for a player only
-    // (as before the port). Anything else is not ours.
+    // `/skript` runs for the console and for players; a script command runs for a player and for
+    // the console, as in Skript (its `executable by:` and `permission:` decide the rest).
+    // Anything else is not ours.
     fn run_mod_command(
         &self,
         host: &mut dyn ServerHost,
@@ -1003,27 +1018,30 @@ impl Hooks for Skript {
             _ => None,
         };
         if root == "skript" || root == "sk" {
-            self.with_manager(host, |_, m, b| {
-                for line in m.skript_command(b, &args) {
+            let refresh = self.with_manager(host, |_, m, b| {
+                let before = m.command_registrations();
+                for line in m.skript_command_as(b, &args, sender.as_ref().map(|(u, _)| *u)) {
                     match sender.as_ref() {
                         Some((uuid, _)) => b.send(*uuid, &line),
                         None => b.log(&line),
                     }
                 }
+                before != m.command_registrations()
             });
+            if refresh {
+                // The scripts' commands changed: every mod is asked again and the trees are resent.
+                host.commands().refresh_commands();
+            }
             return Flow::Cancel;
         }
-        let Some((uuid, name)) = sender else {
-            return Flow::Continue;
+        let op = match &event.source {
+            CommandSource::Player { permission, .. } => permission.level() >= 2,
+            CommandSource::Console { .. } => true,
+            _ => return Flow::Continue,
         };
+        let sender = manager::CommandSender { player: sender, op };
         self.with_manager(host, |_, m, b| {
-            let data = Event {
-                player: Some(player_value(uuid, &name)),
-                message: None,
-                args: args.split_whitespace().map(str::to_owned).collect(),
-                ..Event::default()
-            };
-            if m.dispatch_command(b, &root, data) {
+            if m.run_command(b, &root, &sender, &args) {
                 Flow::Cancel
             } else {
                 Flow::Continue
@@ -1042,16 +1060,6 @@ impl Hooks for Skript {
             return;
         }
         self.with_manager(host, |st, m, b| {
-            for (uuid, text) in std::mem::take(&mut st.chats) {
-                let name = st.names.get(&uuid).cloned().unwrap_or_default();
-                let data = Event {
-                    player: Some(player_value(uuid, &name)),
-                    message: Some(text),
-                    args: Vec::new(),
-                    ..Event::default()
-                };
-                m.fire(b, "chat", data);
-            }
             for (name, data) in std::mem::take(&mut st.queued) {
                 m.fire(b, name, data);
             }
@@ -1112,7 +1120,7 @@ impl Hooks for Skript {
         let _ = fire_cancellable(self, host, &["death"], data);
     }
 
-    // No host here, so the damage event is queued for the tick and cannot be cancelled.
+    // No server host here, so the damage event is queued for the tick and cannot be cancelled.
     // UNVERIFIED: `kind` (the entity's type name) and `container.original()` (the damage before
     // the armor and the enchantments took their share).
     fn living_damage_pre(&self, _: &mut dyn LevelRandomHost, event: &mut LivingDamagePreEvent<'_>) {
@@ -1205,6 +1213,30 @@ impl Hooks for Skript {
     // TODO(arismoko-api: player_move): no move hook on arismoko (only `vehicle_moved` and
     // `player_teleported`). Skript's `move` trigger never fires; the lobby scripts do not use it.
 
+    /// Tab completion of `/skript` and `/sk`: the sub-commands, `all|scripts|config|aliases|last` and
+    /// the script names, for a sender with skript.admin.
+    fn tab_complete(&self, host: &mut dyn ServerHost, event: &mut TabCompleteEvent<'_>) {
+        let line = event.command.trim_start_matches('/');
+        let (root, rest) = line.split_once(' ').unwrap_or((line, ""));
+        let root = root.to_ascii_lowercase();
+        if root != "skript" && root != "sk" {
+            return;
+        }
+        let admin = match host.player(event.player) {
+            Some(p) => p.permission_bool(host, &skript_node()).unwrap_or(false),
+            None => false,
+        };
+        if !admin {
+            return;
+        }
+        let words = self.with_manager(host, |_, m, _| m.completions(rest));
+        for word in words {
+            event
+                .suggestions
+                .push(Suggestion::new((event.range[0], event.range[1]), word));
+        }
+    }
+
     /// Tab: `/skript` and `/sk` only for a sender with skript.admin (Bukkit hides a command by its permission).
     fn player_commands_sent(
         &self,
@@ -1248,12 +1280,23 @@ impl Hooks for Skript {
         fire_cancellable(self, host, &["command"], data)
     }
 
-    // The chat message is queued and fired on the next tick: the scripts run from the tick.
-    // UNVERIFIED: `raw_text` as the typed text (the hook's argument of that name).
-    fn server_chat(&self, _host: &mut dyn ServerHost, event: &mut ServerChatEvent<'_>) -> Flow {
-        lock(&self.st)
-            .chats
-            .push((event.player, event.raw_text.to_owned()));
-        Flow::Continue
+    // The chat line runs the `on chat` triggers at once: `cancel event` stops the message and
+    // `set message to ...` changes what players see (Skript's AsyncPlayerChatEvent).
+    fn server_chat(&self, host: &mut dyn ServerHost, event: &mut ServerChatEvent<'_>) -> Flow {
+        let data = Event {
+            player: Some(player_value(event.player, event.username)),
+            message: Some(event.raw_text.to_owned()),
+            ..Event::default()
+        };
+        let probe = data.clone();
+        self.with_manager(host, |_, m, b| m.fire(b, "chat", data));
+        if let Some(text) = probe.changed_message() {
+            *event.message = Text::literal(text);
+        }
+        if probe.is_cancelled() {
+            Flow::Cancel
+        } else {
+            Flow::Continue
+        }
     }
 }

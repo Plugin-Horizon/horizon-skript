@@ -7,17 +7,20 @@
 use crate::horizon_skript_core::config;
 use crate::horizon_skript_core::error::ScriptError;
 use crate::horizon_skript_core::host::Host;
-use crate::horizon_skript_core::parse::{self, Body, CommandInfo, Script, TriggerKind};
+use crate::horizon_skript_core::classes;
+use crate::horizon_skript_core::parse::{
+    self, ArgSpec, Body, CommandInfo, ExecutableBy, HeaderPart, Script, Trigger, TriggerKind,
+};
 use crate::horizon_skript_core::registry::Registry;
-use crate::horizon_skript_core::run::{Env, Event, Functions, Outcome, Run, STEP_BUDGET};
-use crate::horizon_skript_core::value::{self, Value};
+use crate::horizon_skript_core::run::{CmdArg, Env, Event, Functions, Outcome, Run, STEP_BUDGET};
+use crate::horizon_skript_core::value::{self, Value, format_chat};
 use crate::horizon_skript_core::vars::{self, RawRow};
 use regex::Regex;
 
 /// Statements all the runs of one server tick may execute together.
 const TICK_BUDGET: u32 = 100_000;
 use crate::horizon_skript_core::vars::Variables;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -123,6 +126,17 @@ pub struct Manager {
     pending: Vec<Pending>,
     repeats: Vec<Repeat>,
     tick: u64,
+    /// When a player last ran a command with a `cooldown:` (script, command, player): milliseconds.
+    cooldowns: HashMap<(String, String, u128), i64>,
+    /// The last target of `/skript reload`, for `/skript reload last`.
+    last_reloaded: Option<String>,
+}
+
+/// Who runs a command: a player (UUID and name) or the console, and whether they are an operator.
+#[derive(Clone, Debug)]
+pub struct CommandSender {
+    pub player: Option<(u128, String)>,
+    pub op: bool,
 }
 
 impl Manager {
@@ -140,6 +154,8 @@ impl Manager {
             pending: Vec::new(),
             repeats: Vec::new(),
             tick: 0,
+            cooldowns: HashMap::new(),
+            last_reloaded: None,
         }
     }
 
@@ -322,35 +338,25 @@ impl Manager {
         enabled: bool,
     ) -> Result<(), Vec<ScriptError>> {
         self.unload_script(host, key);
-        match parse::parse_script(&self.registry, host, key, text) {
-            Ok(script) => {
-                self.scripts.insert(
-                    key.to_owned(),
-                    Loaded {
-                        script: Some(Arc::new(script)),
-                        enabled,
-                        errors: Vec::new(),
-                        path: None,
-                    },
-                );
-                self.rebuild();
-                if enabled {
-                    self.fire_for(host, key, "load", Event::default());
-                }
-                Ok(())
-            }
-            Err(errors) => {
-                self.scripts.insert(
-                    key.to_owned(),
-                    Loaded {
-                        script: None,
-                        enabled,
-                        errors: errors.clone(),
-                        path: None,
-                    },
-                );
-                Err(errors)
-            }
+        // The triggers without a problem load, as in Skript; the errors are returned.
+        let (script, errors) = parse::parse_script_partial(&self.registry, host, key, text);
+        self.scripts.insert(
+            key.to_owned(),
+            Loaded {
+                script: Some(Arc::new(script)),
+                enabled,
+                errors: errors.clone(),
+                path: None,
+            },
+        );
+        self.rebuild();
+        if enabled {
+            self.fire_for(host, key, "load", Event::default());
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
         }
     }
 
@@ -369,41 +375,27 @@ impl Manager {
             self.scripts.insert(key.to_owned(), Loaded { script: None, enabled, errors: Vec::new(), path });
             return report;
         }
-        match parse::parse_script(&self.registry, host, key, text) {
-            Ok(script) => {
-                self.scripts.insert(
-                    key.to_owned(),
-                    Loaded {
-                        script: Some(Arc::new(script)),
-                        enabled,
-                        errors: Vec::new(),
-                        path,
-                    },
-                );
-                report.push(format!(
-                    "[Skript] loaded {key}{}",
-                    if enabled { "" } else { " (disabled)" }
-                ));
-            }
-            Err(errors) => {
-                for e in &errors {
-                    report.push(format!("[Skript] {e}"));
-                }
-                report.push(format!(
-                    "[Skript] {key} was not loaded because of {} error(s)",
-                    errors.len()
-                ));
-                self.scripts.insert(
-                    key.to_owned(),
-                    Loaded {
-                        script: None,
-                        enabled,
-                        errors,
-                        path,
-                    },
-                );
-            }
+        let (script, errors) = parse::parse_script_partial(&self.registry, host, key, text);
+        for e in &errors {
+            report.push(format!("[Skript] {e}"));
         }
+        if errors.is_empty() {
+            report.push(format!("[Skript] loaded {key}"));
+        } else {
+            report.push(format!(
+                "[Skript] {key} has {} error(s); the triggers and functions without one were loaded",
+                errors.len()
+            ));
+        }
+        self.scripts.insert(
+            key.to_owned(),
+            Loaded {
+                script: Some(Arc::new(script)),
+                enabled,
+                errors,
+                path,
+            },
+        );
         for line in &report {
             host.log(line);
         }
@@ -509,17 +501,15 @@ impl Manager {
         if loaded.enabled {
             return Ok(());
         }
-        if loaded.script.is_none() && loaded.errors.is_empty() {
-            // Disabled at load: parsed only now.
-            let text = loaded.path.as_ref().and_then(|p| fs::read_to_string(p).ok()).unwrap_or_default();
-            match parse::parse_script(&self.registry, host, &key, &text) {
-                Ok(script) => loaded.script = Some(Arc::new(script)),
-                Err(errors) => {
-                    let n = errors.len();
-                    loaded.errors = errors;
-                    return Err(format!("{key} has {n} error(s) and cannot be enabled."));
-                }
+        // A script that came from a file is read again when it is enabled, as Skript loads the
+        // file it renamed back (a disabled one was not parsed at load).
+        if let Some(text) = loaded.path.as_ref().and_then(|p| fs::read_to_string(p).ok()) {
+            let (script, errors) = parse::parse_script_partial(&self.registry, host, &key, &text);
+            for e in &errors {
+                host.log(&format!("[Skript] {e}"));
             }
+            loaded.script = Some(Arc::new(script));
+            loaded.errors = errors;
         }
         if loaded.script.is_none() {
             return Err(format!("{key} has errors and cannot be enabled."));
@@ -651,6 +641,135 @@ impl Manager {
         found
     }
 
+    /// Runs the script commands named `name` (or having it as an alias) for a command line:
+    /// `rest` is the text after the name. The sender must be allowed (`executable by:`,
+    /// `permission:`, `cooldown:`) and the arguments must fit the header, else the sender gets
+    /// the reason (and the usage) and nothing runs. `false` when no script has such a command.
+    pub fn run_command(
+        &mut self,
+        host: &dyn Host,
+        name: &str,
+        sender: &CommandSender,
+        rest: &str,
+    ) -> bool {
+        let name = name.to_ascii_lowercase();
+        let mut matched: Vec<(String, String, Trigger, Arc<str>)> = Vec::new();
+        for (key, loaded) in &self.scripts {
+            if !loaded.enabled {
+                continue;
+            }
+            let Some(script) = &loaded.script else {
+                continue;
+            };
+            for t in &script.triggers {
+                if let TriggerKind::Command(c) = &t.kind {
+                    if *c == name || t.command.aliases.iter().any(|a| *a == name) {
+                        matched.push((key.clone(), c.clone(), t.clone(), script.file.clone()));
+                    }
+                }
+            }
+        }
+        let found = !matched.is_empty();
+        let now = host.now_millis();
+        let uuid = sender.player.as_ref().map(|(u, _)| *u);
+        let reply = |text: &str| match uuid {
+            Some(u) => host.send(u, text),
+            None => host.log(text),
+        };
+        for (key, command, trigger, file) in matched {
+            let info = &trigger.command;
+            if let Some(by) = &info.executable_by {
+                let allowed = by.iter().any(|b| match b {
+                    ExecutableBy::Players => uuid.is_some(),
+                    ExecutableBy::Operators => sender.op,
+                    ExecutableBy::Console => uuid.is_none(),
+                    ExecutableBy::Blocks => false,
+                });
+                if !allowed {
+                    reply(&format!(
+                        "This command can only be used by {}",
+                        executable_by_text(by)
+                    ));
+                    continue;
+                }
+            }
+            if let (Some(node), Some(u)) = (&info.permission, uuid) {
+                if !host.has_permission(u, node) {
+                    reply(info.permission_message.as_deref().unwrap_or(
+                        "You don't have the required permission to use this command",
+                    ));
+                    continue;
+                }
+            }
+            let cooldown_key = (key.clone(), command.clone(), uuid.unwrap_or(0));
+            if let (Some(ms), Some(u)) = (info.cooldown_ms, uuid) {
+                let bypass = info
+                    .cooldown_bypass
+                    .as_deref()
+                    .is_some_and(|b| !b.is_empty() && host.has_permission(u, b));
+                let waiting = self
+                    .cooldowns
+                    .get(&cooldown_key)
+                    .is_some_and(|last| now - last < ms);
+                if waiting && !bypass {
+                    reply(info.cooldown_message.as_deref().unwrap_or(
+                        "You are using this command too often, please try again later",
+                    ));
+                    continue;
+                }
+            }
+            let cmd_args = match parse_command_args(&info.parts, rest, host) {
+                Ok(args) => args,
+                Err(e) => {
+                    if let Some(message) = e.message {
+                        reply(&message);
+                    }
+                    reply(&usage_line(&command, info));
+                    continue;
+                }
+            };
+            if info.cooldown_ms.is_some() && uuid.is_some() {
+                self.cooldowns.insert(cooldown_key, now);
+            }
+            let mut locals = Variables::new();
+            for a in &cmd_args {
+                if let (Some(n), Some(v)) = (&a.name, &a.value) {
+                    match v {
+                        Value::List(items) => {
+                            for (i, item) in items.iter().enumerate() {
+                                locals.set(&format!("_{n}::{}", i + 1), item.clone());
+                            }
+                        }
+                        other => locals.set(&format!("_{n}"), other.clone()),
+                    }
+                }
+            }
+            let data = Event {
+                player: sender
+                    .player
+                    .as_ref()
+                    .map(|(u, n)| Value::Player { uuid: *u, name: n.clone() }),
+                cmd_args,
+                ..Event::default()
+            };
+            self.start(host, key, Run::new(trigger.body.clone(), file, data, locals, 0));
+        }
+        found
+    }
+
+    /// Every command name and alias the enabled scripts answer, sorted, for the glue to register
+    /// and to see whether a reload changed the command tree.
+    pub fn command_registrations(&self) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .command_infos()
+            .into_iter()
+            .flat_map(|(name, info)| std::iter::once(name).chain(info.aliases))
+            .collect();
+        names.sort();
+        names.dedup();
+        names
+    }
+
     /// Every command name a trigger of an enabled script answers, for the glue to register.
     pub fn command_names(&self) -> Vec<String> {
         let mut names: Vec<String> = self
@@ -730,41 +849,248 @@ impl Manager {
         }
     }
 
-    /// `/skript info|list|reload [name|all]|enable <name>|disable <name>`.
+    /// `/skript help|reload|enable|disable|list|info|update|restore`, as the lines the sender sees.
     pub fn skript_command(&mut self, host: &dyn Host, args: &str) -> Vec<String> {
+        self.skript_command_as(host, args, None)
+    }
+
+    /// The same, for the sender with this UUID (`None`: the console). The lines of `reload`,
+    /// `enable` and `disable` also go to every other online player with `skript.reloadnotify`.
+    pub fn skript_command_as(
+        &mut self,
+        host: &dyn Host,
+        args: &str,
+        sender: Option<u128>,
+    ) -> Vec<String> {
         let args = args.trim();
         let (sub, rest) = args
-            .split_once(' ')
+            .split_once(char::is_whitespace)
             .map_or((args, ""), |(s, r)| (s, r.trim()));
-        match sub {
-            "" | "info" => self.info(),
+        let changes_scripts = matches!(
+            sub.to_ascii_lowercase().as_str(),
+            "reload" | "enable" | "disable"
+        ) && !rest.is_empty();
+        let lines = match sub.to_ascii_lowercase().as_str() {
+            "info" => self.info(),
             "list" => self.list(),
-            "reload" => self.reload(host, if rest.is_empty() { "all" } else { rest }),
-            "enable" | "disable" => {
-                if rest.is_empty() {
-                    return vec![format!("Usage: /skript {sub} <script>")];
-                }
-                let result = if sub == "enable" {
-                    self.enable(host, rest)
-                } else {
-                    self.disable(host, rest)
-                };
-                match result {
-                    Ok(()) => vec![format!("{rest}: {sub}d")],
-                    Err(e) => vec![e],
+            "reload" if !rest.is_empty() => self.reload_command(host, rest),
+            "enable" if !rest.is_empty() => self.enable_command(host, rest),
+            "disable" if !rest.is_empty() => self.disable_command(host, rest),
+            "reload" => skript_help_for("reload", &RELOAD_ARGS),
+            "enable" => skript_help_for("enable", &ENABLE_ARGS),
+            "disable" => skript_help_for("disable", &ENABLE_ARGS),
+            "update" => vec![format_chat(
+                "<red>Updates are not available: this port is part of the server and updates with it.",
+            )],
+            "restore" => vec![format_chat(
+                "<red>Restoring scripts is not available: the scripts are the files in the scripts folder.",
+            )],
+            _ => skript_help(),
+        };
+        if changes_scripts {
+            for (uuid, _) in host.online_players() {
+                if Some(uuid) != sender && host.has_permission(uuid, "skript.reloadnotify") {
+                    for line in &lines {
+                        host.send(uuid, line);
+                    }
                 }
             }
-            _ => vec![
-                "Usage: /skript info|list|reload [script|all]|enable <script>|disable <script>"
-                    .to_owned(),
-            ],
         }
+        lines
+    }
+
+    /// The scripts a `reload`, `enable` or `disable` target names: one script, or the scripts in a
+    /// folder (`sub` or `sub/`). `None` when neither exists.
+    fn targets(&self, target: &str) -> Option<(Vec<String>, bool)> {
+        if let Some(key) = self.find(target) {
+            return Some((vec![key], false));
+        }
+        let folder = format!("{}/", target.trim().trim_end_matches('/'));
+        let keys: Vec<String> = self
+            .scripts
+            .keys()
+            .filter(|k| k.starts_with(&folder) || k.starts_with(&format!("-{folder}")))
+            .cloned()
+            .collect();
+        (!keys.is_empty()).then_some((keys, true))
+    }
+
+    fn no_such_script(target: &str) -> Vec<String> {
+        vec![format_chat(&format!(
+            "<red>Can't find the script <gray>'<gold>{target}<gray>'<red> in the scripts folder!"
+        ))]
+    }
+
+    /// `reload all|scripts|config|aliases|last|<script or folder>`.
+    fn reload_command(&mut self, host: &dyn Host, target: &str) -> Vec<String> {
+        let started = std::time::Instant::now();
+        let lower = target.to_ascii_lowercase();
+        let (label, keys): (String, Vec<String>) = match lower.as_str() {
+            "config" | "aliases" => {
+                let what = if lower == "config" { "main config" } else { "aliases" };
+                return vec![
+                    format_chat(&format!("Reloading <gold>the {what}<reset>...")),
+                    format_chat(
+                        "<yellow>This port reads its settings from the mod's common config; reload that with the server's config reload.",
+                    ),
+                ];
+            }
+            "all" | "scripts" => ("all scripts".to_owned(), self.scripts.keys().cloned().collect()),
+            "last" => match self.last_reloaded.clone() {
+                None => {
+                    return vec![format_chat(
+                        "<red>No scripts have been reloaded yet. You must reload a script first.",
+                    )]
+                }
+                Some(t) => return self.reload_command(host, &t),
+            },
+            _ => match self.targets(target) {
+                None => return Self::no_such_script(target),
+                Some((keys, true)) => (format!("all scripts in <gold>{target}<reset>"), keys),
+                Some((keys, false)) => {
+                    let key = keys[0].clone();
+                    if self.scripts.get(&key).is_some_and(|l| !l.enabled) {
+                        let name = key.trim_start_matches('-');
+                        return vec![format_chat(&format!(
+                            "<gold>{name}<reset> is currently disabled. Use <gray>/<gold>skript <cyan>enable <red>{name}<reset> to enable it."
+                        ))];
+                    }
+                    (format!("<gold>{key}<reset>"), keys)
+                }
+            },
+        };
+        if lower != "all" && lower != "scripts" {
+            self.last_reloaded = Some(target.to_owned());
+        }
+        let mut lines = vec![format_chat(&format!("Reloading {label}..."))];
+        let mut errors = 0usize;
+        for key in &keys {
+            if self.scripts.get(key).is_some_and(|l| !l.enabled) {
+                continue;
+            }
+            let _ = self.reload(host, key);
+            if let Some(l) = self.scripts.get(key) {
+                errors += l.errors.len();
+                lines.extend(
+                    l.errors
+                        .iter()
+                        .map(|e| format_chat(&format!("<light red>    {e}"))),
+                );
+            }
+        }
+        let ms = started.elapsed().as_millis();
+        lines.push(if errors == 0 {
+            format_chat(&format!(
+                "<lime>Successfully reloaded {label}<lime>. <gray>(<gold>{ms}ms<gray>)"
+            ))
+        } else {
+            format_chat(&format!(
+                "<light red>Encountered <gold>{errors} <light red>error{} while reloading {label}<light red>! <gray>(<gold>{ms}ms<gray>)",
+                if errors == 1 { "" } else { "s" }
+            ))
+        });
+        lines
+    }
+
+    /// `enable all|<script or folder>`.
+    fn enable_command(&mut self, host: &dyn Host, target: &str) -> Vec<String> {
+        let all = target.eq_ignore_ascii_case("all");
+        let (keys, single) = if all {
+            (self.scripts.keys().cloned().collect(), false)
+        } else {
+            match self.targets(target) {
+                None => return Self::no_such_script(target),
+                Some((keys, folder)) => (keys, !folder),
+            }
+        };
+        let mut lines = Vec::new();
+        let mut enabled = 0usize;
+        for key in keys {
+            if self.scripts.get(&key).is_some_and(|l| l.enabled) {
+                if single {
+                    lines.push(format_chat(&format!(
+                        "<gold>{key}<reset> is already enabled! Use <gray>/<gold>skript <cyan>reload <red>{key}<reset> to reload it if it was changed."
+                    )));
+                }
+                continue;
+            }
+            match self.enable(host, &key) {
+                Ok(()) => enabled += 1,
+                Err(e) => lines.push(format_chat(&format!("<light red>{e}"))),
+            }
+            if let Some(l) = self.scripts.get(&key) {
+                lines.extend(
+                    l.errors
+                        .iter()
+                        .map(|e| format_chat(&format!("<light red>    {e}"))),
+                );
+            }
+        }
+        if enabled > 0 {
+            lines.push(format_chat(&format!(
+                "Successfully enabled & parsed <gold>{enabled}<reset> previously disabled script{}.",
+                if enabled == 1 { "" } else { "s" }
+            )));
+        }
+        lines
+    }
+
+    /// `disable all|<script or folder>`.
+    fn disable_command(&mut self, host: &dyn Host, target: &str) -> Vec<String> {
+        let keys: Vec<String> = if target.eq_ignore_ascii_case("all") {
+            self.scripts.keys().cloned().collect()
+        } else {
+            match self.targets(target) {
+                None => return Self::no_such_script(target),
+                Some((keys, _)) => keys,
+            }
+        };
+        let mut disabled = 0usize;
+        for key in keys {
+            if self.scripts.get(&key).is_some_and(|l| l.enabled) && self.disable(host, &key).is_ok() {
+                disabled += 1;
+            }
+        }
+        vec![format_chat(&if target.eq_ignore_ascii_case("all") {
+            "Successfully disabled all scripts.".to_owned()
+        } else {
+            format!("Successfully disabled <gold>{disabled}<reset> script(s) in <gold>{target}<reset>.")
+        })]
+    }
+
+    /// The words `/skript <args>` can complete: the sub-commands, then `all`, `scripts`, ... and
+    /// the script names after `reload`, `enable` and `disable`. `args` is the text after the command
+    /// name, ending in a space when the next word has not been started.
+    pub fn completions(&self, args: &str) -> Vec<String> {
+        let words: Vec<&str> = args.split_whitespace().collect();
+        let starting = args.ends_with(char::is_whitespace) || words.is_empty();
+        let (index, prefix) = if starting {
+            (words.len(), "")
+        } else {
+            (words.len() - 1, words[words.len() - 1])
+        };
+        let mut pool: Vec<String> = match index {
+            0 => SUB_COMMANDS.iter().map(|s| (*s).to_owned()).collect(),
+            1 => {
+                let mut pool: Vec<String> = match words[0].to_ascii_lowercase().as_str() {
+                    "reload" => RELOAD_ARGS.iter().map(|s| (*s).to_owned()).collect(),
+                    "enable" | "disable" => vec!["all".to_owned()],
+                    _ => return Vec::new(),
+                };
+                pool.extend(self.scripts.keys().cloned());
+                pool
+            }
+            _ => return Vec::new(),
+        };
+        let lower = prefix.to_ascii_lowercase();
+        pool.retain(|w| w.to_ascii_lowercase().starts_with(&lower));
+        pool
     }
 
     /// Counts for `/skript info`.
     pub fn info(&self) -> Vec<String> {
         let enabled = self.scripts.values().filter(|l| l.enabled).count();
-        let broken = self.scripts.values().filter(|l| l.script.is_none() && !l.errors.is_empty()).count();
+        let broken = self.scripts.values().filter(|l| !l.errors.is_empty()).count();
         let (effects, conditions, expressions, events) = self.registry.counts();
         vec![
             format!(
@@ -795,6 +1121,9 @@ impl Manager {
                     // disabled at load: not parsed yet
                     (None, false) if l.errors.is_empty() => "disabled".to_owned(),
                     (None, _) => format!("errors ({})", l.errors.len()),
+                    (Some(_), true) if !l.errors.is_empty() => {
+                        format!("enabled, errors ({})", l.errors.len())
+                    }
                     (Some(_), true) => "enabled".to_owned(),
                     (Some(_), false) => "disabled".to_owned(),
                 };
@@ -818,6 +1147,181 @@ impl Manager {
     pub fn pending_count(&self) -> usize {
         self.pending.len()
     }
+}
+
+/// The sub-commands of `/skript`, as the original completes them.
+const SUB_COMMANDS: [&str; 8] = [
+    "help", "reload", "enable", "disable", "list", "info", "update", "restore",
+];
+const RELOAD_ARGS: [&str; 5] = ["all", "scripts", "config", "aliases", "last"];
+const ENABLE_ARGS: [&str; 1] = ["all"];
+
+/// `Usage: /skript reload ...` and what each argument does (the original's `sendHelp`).
+fn skript_help_for(sub: &str, args: &[&str]) -> Vec<String> {
+    let mut lines = vec![format_chat(&format!(
+        "Usage: <gold>/skript <yellow>{sub} <red>..."
+    ))];
+    for arg in args {
+        let what = match (sub, *arg) {
+            ("reload", "all") => "Reloads the config, all aliases configs and all scripts",
+            ("reload", "scripts") => "Reloads all scripts",
+            ("reload", "config") => "Reloads the main config",
+            ("reload", "aliases") => "Reloads the aliases configs",
+            ("reload", "last") => "Reloads the last script that was reloaded",
+            ("enable", _) => "Enables all scripts",
+            _ => "Disables all scripts",
+        };
+        lines.push(format_chat(&format!("   <yellow>{arg} <gray>- <white>{what}")));
+    }
+    let script = match sub {
+        "reload" => "Reloads a specific script or a folder of scripts",
+        "enable" => "Enables a specific script or a folder of scripts",
+        _ => "Disables a specific script or a folder of scripts",
+    };
+    lines.push(format_chat(&format!("   <yellow><script> <gray>- <white>{script}")));
+    lines
+}
+
+/// `/skript` and `/skript help`.
+fn skript_help() -> Vec<String> {
+    [
+        "<gold>Skript's main command",
+        "   <yellow>help <gray>- <white>Prints this help message. Use '/skript reload/enable/disable/update' to get more info",
+        "   <yellow>reload <gray>- <white>Reloads a specific script, all scripts, the config, or everything",
+        "   <yellow>enable <gray>- <white>Enables all scripts or a specific one",
+        "   <yellow>disable <gray>- <white>Disables all scripts or a specific one",
+        "   <yellow>update <gray>- <white>Check for updates or read the changelog",
+        "   <yellow>restore <gray>- <white>Stores loaded scripts back as files",
+        "   <yellow>list <gray>- <white>Lists all enabled and disabled scripts",
+        "   <yellow>info <gray>- <white>Prints the number of scripts and syntax elements",
+    ]
+    .iter()
+    .map(|l| format_chat(l))
+    .collect()
+}
+
+/// A command line that does not fit the header. `message` says what is wrong with an argument.
+#[derive(Debug, PartialEq, Eq)]
+pub struct ArgError {
+    pub message: Option<String>,
+}
+
+/// The next argument of a line: a quoted phrase or a word, and what follows it.
+fn next_token(rest: &str) -> (String, &str) {
+    let r = rest.trim_start();
+    if let Some(quoted) = r.strip_prefix('"') {
+        if let Some(end) = quoted.find('"') {
+            return (quoted[..end].to_owned(), quoted[end + 1..].trim_start());
+        }
+    }
+    match r.find(char::is_whitespace) {
+        Some(i) => (r[..i].to_owned(), r[i..].trim_start()),
+        None => (r.to_owned(), ""),
+    }
+}
+
+/// The value one argument takes from `token`; `None` when it is not valid for the type.
+fn arg_value(spec: &ArgSpec, token: &str, host: &dyn Host) -> Option<Value> {
+    if spec.plural {
+        let mut items = Vec::new();
+        for piece in token
+            .split(|c: char| c.is_whitespace() || c == ',')
+            .filter(|p| !p.is_empty() && !p.eq_ignore_ascii_case("and") && !p.eq_ignore_ascii_case("or"))
+        {
+            items.push(classes::parse_value(spec.class, piece, host)?);
+        }
+        Some(Value::List(items))
+    } else {
+        classes::parse_value(spec.class, token, host)
+    }
+}
+
+/// Matches the text after a command's name with the header's words and arguments, as Skript's
+/// command parsing does: words and quoted phrases for the arguments, the last text argument takes
+/// the rest of the line, an optional argument left out takes its default.
+pub fn parse_command_args(
+    parts: &[HeaderPart],
+    rest: &str,
+    host: &dyn Host,
+) -> Result<Vec<CmdArg>, ArgError> {
+    let mut rest = rest.trim();
+    let mut out = Vec::new();
+    for (i, part) in parts.iter().enumerate() {
+        match part {
+            HeaderPart::Word { text, optional } => {
+                let (token, after) = next_token(rest);
+                if !rest.is_empty() && token.eq_ignore_ascii_case(text) {
+                    rest = after;
+                } else if !optional {
+                    return Err(ArgError { message: None });
+                }
+            }
+            HeaderPart::Arg(spec) => {
+                if rest.is_empty() {
+                    if !spec.optional {
+                        return Err(ArgError { message: None });
+                    }
+                    out.push(CmdArg {
+                        name: spec.name.clone(),
+                        class: spec.class,
+                        value: spec
+                            .default
+                            .as_ref()
+                            .and_then(|d| arg_value(spec, d, host)),
+                    });
+                    continue;
+                }
+                let greedy = i + 1 == parts.len() && (spec.class == "text" || spec.plural);
+                let (token, after) = if greedy {
+                    (rest.to_owned(), "")
+                } else {
+                    next_token(rest)
+                };
+                let Some(value) = arg_value(spec, &token, host) else {
+                    return Err(ArgError {
+                        message: Some(format!(
+                            "\u{a7}4'{token}' is not a valid {}.",
+                            spec.class
+                        )),
+                    });
+                };
+                out.push(CmdArg {
+                    name: spec.name.clone(),
+                    class: spec.class,
+                    value: Some(value),
+                });
+                rest = after;
+            }
+        }
+    }
+    if rest.is_empty() {
+        Ok(out)
+    } else {
+        Err(ArgError { message: None })
+    }
+}
+
+/// `/name <text> [<number>]`, or the script's own `usage:`.
+fn usage_line(name: &str, info: &CommandInfo) -> String {
+    match &info.usage {
+        Some(u) => u.clone(),
+        None if info.header.is_empty() => format!("/{name}"),
+        None => format!("/{name} {}", info.header),
+    }
+}
+
+/// `players`, `the console`: for the line a refused sender gets.
+fn executable_by_text(by: &[ExecutableBy]) -> String {
+    let names: Vec<&str> = by
+        .iter()
+        .map(|b| match b {
+            ExecutableBy::Players => "players",
+            ExecutableBy::Operators => "operators",
+            ExecutableBy::Console => "the console",
+            ExecutableBy::Blocks => "blocks",
+        })
+        .collect();
+    names.join(" and ")
 }
 
 /// The permission nodes a script's text names: the `permission:` line of a command and a

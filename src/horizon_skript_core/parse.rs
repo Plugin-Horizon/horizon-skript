@@ -10,7 +10,7 @@ use crate::horizon_skript_core::host::Host;
 use crate::horizon_skript_core::pattern::{Match, SlotSpec};
 use crate::horizon_skript_core::registry::{Condition, Effect, Matched, Registry};
 use crate::horizon_skript_core::run::Ctx;
-use crate::horizon_skript_core::script::{self, Item};
+use crate::horizon_skript_core::script::{self, Item, Line};
 use crate::horizon_skript_core::value::Value;
 use std::sync::Arc;
 
@@ -89,8 +89,38 @@ pub enum TriggerKind {
     Every(u64),
 }
 
+/// Who may run a command (`executable by:`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExecutableBy {
+    Players,
+    Operators,
+    Console,
+    Blocks,
+}
+
+/// One argument of a command header: `<name: type = default>`, or `[<type>]` when optional.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ArgSpec {
+    /// The name of `<name: type>`: the argument is also the local variable `{_name}`.
+    pub name: Option<String>,
+    pub class: &'static str,
+    /// A plural type (`<players>`) takes the rest of the line as a list.
+    pub plural: bool,
+    pub optional: bool,
+    /// The text after `=`, without quotes.
+    pub default: Option<String>,
+}
+
+/// A word or an argument of a command header after the command's name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HeaderPart {
+    Word { text: String, optional: bool },
+    Arg(ArgSpec),
+}
+
 /// The lines of a command section besides its body: `permission:`, `permission message:`,
-/// `usage:`, `aliases:` and `description:`.
+/// `usage:`, `aliases:`, `description:`, `executable by:`, `cooldown:` and its companions, and the
+/// header's arguments.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CommandInfo {
     pub permission: Option<String>,
@@ -98,6 +128,16 @@ pub struct CommandInfo {
     pub usage: Option<String>,
     pub aliases: Vec<String>,
     pub description: Option<String>,
+    /// The words and arguments after the name in the header.
+    pub parts: Vec<HeaderPart>,
+    /// The header text after the name (`<text> [<number=1>]`), for the usage line.
+    pub header: String,
+    /// `None` is everyone (players and the console).
+    pub executable_by: Option<Vec<ExecutableBy>>,
+    pub cooldown_ms: Option<i64>,
+    pub cooldown_message: Option<String>,
+    pub cooldown_bypass: Option<String>,
+    pub prefix: Option<String>,
 }
 
 #[derive(Clone)]
@@ -133,13 +173,30 @@ pub struct Script {
     pub functions: Vec<Arc<Function>>,
 }
 
-/// Parses a file's text. All problems are returned together, in line order.
+/// Parses a file's text. All problems are returned together, in line order. A file with a
+/// problem is an error here; [`parse_script_partial`] also gives what did parse.
 pub fn parse_script(
     reg: &Registry,
     host: &dyn Host,
     name: &str,
     source: &str,
 ) -> Result<Script, Vec<ScriptError>> {
+    let (script, errors) = parse_script_partial(reg, host, name, source);
+    if errors.is_empty() {
+        Ok(script)
+    } else {
+        Err(errors)
+    }
+}
+
+/// Parses a file's text as Skript loads it: a trigger or function with a problem is reported and
+/// left out, the others are kept. The errors are in line order.
+pub fn parse_script_partial(
+    reg: &Registry,
+    host: &dyn Host,
+    name: &str,
+    source: &str,
+) -> (Script, Vec<ScriptError>) {
     let mut errors = Vec::new();
     let items = script::read(name, source, &mut errors);
     let mut p = Reader {
@@ -149,92 +206,115 @@ pub fn parse_script(
         file_arc: Arc::from(name),
         errors: Vec::new(),
     };
+    // `aliases:` first: they apply to the whole file, wherever the section stands.
+    for item in &items {
+        if item.is_section() && item.header().eq_ignore_ascii_case("aliases") {
+            p.aliases(item);
+        }
+    }
     let mut triggers = Vec::new();
+    let mut defaults: Vec<Trigger> = Vec::new();
     let mut functions: Vec<Arc<Function>> = Vec::new();
     for item in &items {
+        let before = p.errors.len();
+        let line = item.line.number;
         if !item.is_section() {
+            let text = item.line.text.as_str();
+            if strip_ci(text, "using ").is_some() {
+                // `using <experiment>`: the experiments change how Skript's own syntax parses.
+                continue;
+            }
             p.error(
-                item.line.number,
+                line,
                 "Can't understand this line here, expected a trigger or a function",
                 &item.line.raw,
             );
             continue;
         }
         let header = item.header().to_owned();
-        let line = item.line.number;
-        if header.eq_ignore_ascii_case("options") {
+        if header.eq_ignore_ascii_case("options") || header.eq_ignore_ascii_case("aliases") {
+            continue;
+        }
+        if header.eq_ignore_ascii_case("variables") {
+            if let Some(t) = p.variables(item) {
+                defaults.push(t);
+            }
             continue;
         }
         if let Some(event) = p.event(&header) {
             let body = p.statements(&item.children, line);
-            triggers.push(Trigger {
-                kind: TriggerKind::Event(event),
-                body,
-                line,
-                command: CommandInfo::default(),
-            });
-        } else if let Some(rest) = strip_ci(&header, "command /") {
-            let name = rest
-                .split_whitespace()
-                .next()
-                .unwrap_or("")
-                .to_ascii_lowercase();
-            if name.is_empty() {
-                p.error(line, "a command needs a name", &item.line.raw);
-                continue;
+            if p.errors.len() == before {
+                triggers.push(Trigger {
+                    kind: TriggerKind::Event(event),
+                    body,
+                    line,
+                    command: CommandInfo::default(),
+                });
             }
-            let (info, body_items) = p.command_section(&item.children);
+        } else if let Some(rest) = strip_ci(&header, "command /") {
+            let Some((name, info)) = p.command_header(rest, item) else {
+                continue;
+            };
+            let (info, body_items) = p.command_section(&item.children, info);
             let body = p.statements(&body_items, line);
-            triggers.push(Trigger {
-                kind: TriggerKind::Command(name),
-                body,
-                line,
-                command: info,
-            });
+            if p.errors.len() == before {
+                triggers.push(Trigger {
+                    kind: TriggerKind::Command(name),
+                    body,
+                    line,
+                    command: info,
+                });
+            }
         } else if let Some(rest) = strip_ci(&header, "every ") {
             match every_ticks(rest) {
                 Some(ticks) => {
                     let body = p.statements(&item.children, line);
-                    triggers.push(Trigger {
-                        kind: TriggerKind::Every(ticks),
-                        body,
-                        line,
-                        command: CommandInfo::default(),
-                    });
+                    if p.errors.len() == before {
+                        triggers.push(Trigger {
+                            kind: TriggerKind::Every(ticks),
+                            body,
+                            line,
+                            command: CommandInfo::default(),
+                        });
+                    }
                 }
                 None => p.error(line, "Can't understand this interval", &item.line.raw),
             }
-        } else if let Some(rest) = strip_ci(&header, "function ") {
-            match p.function(rest, item) {
-                Some(f) => {
-                    if functions.iter().any(|g| g.name == f.name) {
-                        p.error(
-                            line,
-                            &format!("the function {} is defined twice in this file", f.name),
-                            &item.line.raw,
-                        );
-                    } else {
-                        functions.push(Arc::new(f));
-                    }
+        } else if let Some(rest) = strip_ci(&header, "function ")
+            .or_else(|| strip_ci(&header, "local function "))
+        {
+            // A `local function` is visible to its own file in Skript; here it joins the shared table.
+            if let Some(f) = p.function(rest, item) {
+                if p.errors.len() != before {
+                    // the body had a problem: the function is left out
+                } else if functions.iter().any(|g| g.name == f.name) {
+                    p.error(
+                        line,
+                        &format!("the function {} is defined twice in this file", f.name),
+                        &item.line.raw,
+                    );
+                } else {
+                    functions.push(Arc::new(f));
                 }
-                None => {}
             }
         } else {
             p.error(line, "Can't understand this section", &item.line.raw);
         }
     }
     errors.extend(p.errors);
-    if !errors.is_empty() {
-        errors.sort_by_key(|e| e.line);
-        return Err(errors);
-    }
-    // Function bodies were read with the other triggers; they are complete now.
-    Ok(Script {
-        name: name.to_owned(),
-        file: Arc::from(name),
-        triggers,
-        functions,
-    })
+    errors.sort_by_key(|e| e.line);
+    // Function bodies were read with the other triggers; they are complete now. The defaults of
+    // `variables:` run before every other trigger of the file's load.
+    defaults.append(&mut triggers);
+    (
+        Script {
+            name: name.to_owned(),
+            file: Arc::from(name),
+            triggers: defaults,
+            functions,
+        },
+        errors,
+    )
 }
 
 fn strip_ci<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
@@ -273,7 +353,7 @@ impl Reader<'_> {
 
     /// The event a trigger header names (`on join`), if one is registered.
     fn event(&self, header: &str) -> Option<&'static str> {
-        let rest = strip_ci(header, "on ")?.trim();
+        let rest = without_priority(strip_ci(header, "on ")?.trim());
         self.reg.events.iter().find_map(|entry| {
             entry
                 .patterns
@@ -349,10 +429,29 @@ impl Reader<'_> {
         })
     }
 
+    /// The header of `command /name <args>:` after the slash: the name and, in the returned info,
+    /// the words and arguments that follow it. `None` (and an error) when the header is wrong.
+    fn command_header(&mut self, rest: &str, item: &Item) -> Option<(String, CommandInfo)> {
+        let line = item.line.number;
+        match parse_command_header(rest) {
+            Ok((name, parts, header)) => Some((
+                name,
+                CommandInfo {
+                    parts,
+                    header,
+                    ..CommandInfo::default()
+                },
+            )),
+            Err(message) => {
+                self.error(line, &message, &item.line.raw);
+                None
+            }
+        }
+    }
+
     /// Reads the lines of a command section that are not its body, and returns the body's items:
     /// the `trigger:` section when there is one, else every item that is not a metadata line.
-    fn command_section(&mut self, items: &[Item]) -> (CommandInfo, Vec<Item>) {
-        let mut info = CommandInfo::default();
+    fn command_section(&mut self, items: &[Item], mut info: CommandInfo) -> (CommandInfo, Vec<Item>) {
         self.command_meta(items, &mut info);
         if let Some(t) = items
             .iter()
@@ -384,12 +483,106 @@ impl Reader<'_> {
                 "aliases" => {
                     info.aliases = value
                         .split(',')
-                        .map(|a| a.trim().trim_start_matches('/').to_owned())
+                        .map(|a| a.trim().trim_start_matches('/').to_ascii_lowercase())
                         .filter(|a| !a.is_empty())
                         .collect();
                 }
                 "description" => info.description = Some(value.to_owned()),
+                "executable by" => match parse_executable_by(value) {
+                    Ok(by) => info.executable_by = Some(by),
+                    Err(message) => self.error(item.line.number, &message, &item.line.raw),
+                },
+                "cooldown" => match classes::parse_timespan(value) {
+                    Some(ms) => info.cooldown_ms = Some(ms),
+                    None => self.error(
+                        item.line.number,
+                        &format!("'{value}' is not a timespan"),
+                        &item.line.raw,
+                    ),
+                },
+                "cooldown message" => {
+                    info.cooldown_message = Some(crate::horizon_skript_core::value::format_chat(
+                        unquote(value),
+                    ))
+                }
+                "cooldown bypass" => info.cooldown_bypass = Some(value.to_owned()),
+                "prefix" => info.prefix = Some(value.to_owned()),
+                // The storage of last usage dates is kept in memory only.
                 _ => {}
+            }
+        }
+    }
+
+    /// `variables:`: each `{name} = value` line sets the variable when it is not set yet, when
+    /// the file loads. Returned as a trigger of that load.
+    fn variables(&mut self, item: &Item) -> Option<Trigger> {
+        let before = self.errors.len();
+        let mut lines: Vec<Item> = Vec::new();
+        for child in &item.children {
+            let number = child.line.number;
+            let (name, value) = match child.line.text.split_once('=') {
+                Some((n, v))
+                    if !child.is_section()
+                        && n.trim().starts_with('{')
+                        && n.trim().ends_with('}')
+                        && !v.trim().is_empty() =>
+                {
+                    (n.trim().to_owned(), v.trim().to_owned())
+                }
+                _ => {
+                    self.error(
+                        number,
+                        "A variable default looks like `{name} = value`",
+                        &child.line.raw,
+                    );
+                    continue;
+                }
+            };
+            let synth = |text: String, level: usize, children: Vec<Item>| Item {
+                line: Line {
+                    number,
+                    level,
+                    text,
+                    raw: child.line.raw.clone(),
+                },
+                children,
+            };
+            let set = synth(format!("set {name} to {value}"), 1, Vec::new());
+            lines.push(synth(format!("if {name} is not set:"), 0, vec![set]));
+        }
+        if lines.is_empty() || self.errors.len() != before {
+            return None;
+        }
+        let line = item.line.number;
+        let body = self.statements(&lines, line);
+        if self.errors.len() != before {
+            return None;
+        }
+        Some(Trigger {
+            kind: TriggerKind::Event("load"),
+            body,
+            line,
+            command: CommandInfo::default(),
+        })
+    }
+
+    /// `aliases:`: each `name = item` line lets the file name an item type by `name`.
+    fn aliases(&mut self, item: &Item) {
+        for child in &item.children {
+            match child.line.text.split_once('=') {
+                Some((name, target)) if !child.is_section() => {
+                    let (name, target) = (name.trim(), target.trim());
+                    if name.is_empty() || target.is_empty() {
+                        self.error(child.line.number, "An alias needs a name and an item", &child.line.raw);
+                    } else {
+                        self.parser.set_alias(name, target);
+                    }
+                }
+                _ => self.error(
+                    child.line.number,
+                    "An alias looks like `name = item`",
+                    &child.line.raw,
+                ),
             }
         }
     }
@@ -573,16 +766,176 @@ impl Reader<'_> {
 /// `permission: node` and the other metadata lines of a command: the key (lower case) and the
 /// text after the colon.
 fn command_key(text: &str) -> Option<(&'static str, &str)> {
-    const KEYS: [&str; 5] = [
+    const KEYS: [&str; 11] = [
         "permission message",
         "permission",
         "usage",
         "aliases",
         "description",
+        "executable by",
+        "cooldown message",
+        "cooldown bypass",
+        "cooldown storage",
+        "cooldown",
+        "prefix",
     ];
     let (head, value) = text.split_once(':')?;
     let head = head.trim().to_ascii_lowercase();
     KEYS.iter().find(|k| **k == head).map(|k| (*k, value))
+}
+
+/// The text without one pair of surrounding double quotes.
+fn unquote(s: &str) -> &str {
+    s.strip_prefix('"')
+        .and_then(|r| r.strip_suffix('"'))
+        .unwrap_or(s)
+}
+
+/// `players, console`: the senders of `executable by:`.
+fn parse_executable_by(value: &str) -> Result<Vec<ExecutableBy>, String> {
+    let mut out = Vec::new();
+    for piece in value.replace(" and ", ",").replace(" or ", ",").split(',') {
+        let piece = piece.trim().to_ascii_lowercase();
+        out.push(match piece.as_str() {
+            "players" | "player" => ExecutableBy::Players,
+            "operators" | "ops" => ExecutableBy::Operators,
+            "console" | "the console" => ExecutableBy::Console,
+            "blocks" => ExecutableBy::Blocks,
+            other => return Err(format!("Invalid command sender type: {other}")),
+        });
+    }
+    Ok(out)
+}
+
+/// An event header without its ` with priority <priority>` tail.
+fn without_priority(rest: &str) -> &str {
+    const TAIL: &str = " with priority ";
+    let lower = rest.to_ascii_lowercase();
+    match lower.rfind(TAIL) {
+        Some(i)
+            if matches!(
+                lower[i + TAIL.len()..].trim(),
+                "lowest" | "low" | "normal" | "high" | "highest" | "monitor"
+            ) =>
+        {
+            rest[..i].trim_end()
+        }
+        _ => rest,
+    }
+}
+
+/// The type of a command argument: a core class, or Skript's `string`.
+fn arg_type(name: &str) -> Option<classes::TypeName> {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "string" => Some(classes::TypeName { class: "text", plural: false }),
+        "strings" => Some(classes::TypeName { class: "text", plural: true }),
+        other => classes::resolve(other),
+    }
+}
+
+/// `name: type = default` inside `<...>`.
+fn parse_arg(inner: &str, optional: bool) -> Result<ArgSpec, String> {
+    let inner = inner.trim();
+    let (name, rest) = match inner.split_once(':') {
+        Some((n, r)) if is_name(n.trim()) && !r.trim().is_empty() => (Some(n.trim().to_owned()), r),
+        _ => (None, inner),
+    };
+    let (ty, default) = match rest.split_once('=') {
+        Some((t, d)) => (t.trim(), Some(unquote(d.trim()).to_owned())),
+        None => (rest.trim(), None),
+    };
+    let Some(t) = arg_type(ty) else {
+        return Err(format!("'{ty}' is not a type an argument can have"));
+    };
+    Ok(ArgSpec {
+        name,
+        class: t.class,
+        plural: t.plural,
+        optional: optional || default.is_some(),
+        default,
+    })
+}
+
+/// The header of `command /name <text> [<number=1>] word`: the name (lower case), the words and
+/// arguments after it, and the text after the name. Errors say what is wrong.
+pub fn parse_command_header(rest: &str) -> Result<(String, Vec<HeaderPart>, String), String> {
+    let rest = rest.trim();
+    let name_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+    let name = &rest[..name_end];
+    if name.is_empty() {
+        return Err("a command needs a name".to_owned());
+    }
+    if name.contains(['<', '[', '(', '|']) {
+        return Err(
+            "Literals cannot be placed directly next to arguments. Separate them with a space."
+                .to_owned(),
+        );
+    }
+    let tail = rest[name_end..].trim();
+    let chars: Vec<char> = tail.chars().collect();
+    let mut parts = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c.is_whitespace() {
+            i += 1;
+        } else if c == '<' {
+            let Some(len) = chars[i + 1..].iter().position(|c| *c == '>') else {
+                return Err("Missing expected closing bracket '>'".to_owned());
+            };
+            let inner: String = chars[i + 1..i + 1 + len].iter().collect();
+            parts.push(HeaderPart::Arg(parse_arg(&inner, false)?));
+            i += len + 2;
+        } else if c == '[' {
+            let mut depth = 0usize;
+            let mut end = None;
+            for (k, ch) in chars.iter().enumerate().skip(i) {
+                match ch {
+                    '[' => depth += 1,
+                    ']' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = Some(k);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let Some(end) = end else {
+                return Err("Missing expected closing bracket ']'".to_owned());
+            };
+            let inner: String = chars[i + 1..end].iter().collect();
+            let t = inner.trim();
+            if let Some(arg) = t.strip_prefix('<').and_then(|a| a.strip_suffix('>')) {
+                if arg.contains('>') {
+                    return Err("an optional group holds one argument".to_owned());
+                }
+                parts.push(HeaderPart::Arg(parse_arg(arg, true)?));
+            } else if is_name(t) {
+                parts.push(HeaderPart::Word { text: t.to_ascii_lowercase(), optional: true });
+            } else {
+                return Err(format!("this command pattern is not supported: [{t}]"));
+            }
+            i = end + 1;
+        } else if matches!(c, '(' | ')' | '|' | ']' | '>') {
+            return Err(format!("this command pattern is not supported: '{c}'"));
+        } else {
+            let start = i;
+            while i < chars.len() && !chars[i].is_whitespace() && chars[i] != '<' && chars[i] != '[' {
+                i += 1;
+            }
+            if i < chars.len() && !chars[i].is_whitespace() {
+                return Err(
+                    "Literals cannot be placed directly next to arguments. Separate them with a space."
+                        .to_owned(),
+                );
+            }
+            let word: String = chars[start..i].iter().collect();
+            parts.push(HeaderPart::Word { text: word.to_ascii_lowercase(), optional: false });
+        }
+    }
+    Ok((name.to_ascii_lowercase(), parts, tail.to_owned()))
 }
 
 fn to_matched(m: Match<Expr>) -> Matched {
