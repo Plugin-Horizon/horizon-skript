@@ -195,7 +195,10 @@ pub fn register(reg: &mut Registry) -> Result<(), PatternError> {
     // Before the inventory test: `has permission x` must not read `permission x` as an item.
     reg.add_condition(
         "permission",
-        &["%players% (has|have)(1¦ not|1¦n't|) [the] permission[s] %texts%"],
+        &[
+            "%players% (has|have)(1¦ not|1¦n't|) [the] permission[s] %texts%",
+            "%players% (1¦does not|1¦doesn't|1¦do not|1¦don't) have [the] permission[s] %texts%",
+        ],
         0,
         permission,
     )?;
