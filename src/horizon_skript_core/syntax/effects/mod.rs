@@ -12,6 +12,7 @@ mod entities;
 mod items;
 mod messages;
 mod particles;
+mod place;
 mod player_state;
 mod players;
 mod world;
@@ -20,7 +21,7 @@ use crate::horizon_skript_core::error::RunError;
 use crate::horizon_skript_core::pattern::PatternError;
 use crate::horizon_skript_core::registry::{Flow, Matched, Registry};
 use crate::horizon_skript_core::run::Ctx;
-use crate::horizon_skript_core::value::Value;
+use crate::horizon_skript_core::value::{Location, Value, format_number};
 
 /// Registers every effect of this group.
 pub fn register(reg: &mut Registry) -> Result<(), PatternError> {
@@ -32,6 +33,7 @@ pub fn register(reg: &mut Registry) -> Result<(), PatternError> {
     entities::register(reg)?;
     console::register(reg)?;
     player_state::register(reg)?;
+    place::register(reg)?;
     Ok(())
 }
 
@@ -111,6 +113,53 @@ fn ticks_in(cx: &mut Ctx<'_>, m: &Matched, n: usize, default: u64) -> Result<u64
 /// Runs a vanilla command as the console, without a leading slash.
 fn console(cx: &mut Ctx<'_>, line: &str) {
     cx.host.actions().run_console(line.trim_start_matches('/'));
+}
+
+/// The locations of slot `n` (a location, a player's position, or a list of them). An empty
+/// slot is the event player's position.
+fn locations_in(cx: &mut Ctx<'_>, m: &Matched, n: usize) -> Result<Vec<Location>, RunError> {
+    let v = slot(cx, m, n)?;
+    if v.is_null() {
+        let player = cx
+            .event
+            .player
+            .clone()
+            .ok_or_else(|| RunError::new("there is no player in this event"))?;
+        return Ok(vec![super::support::location_of(cx, &player)?]);
+    }
+    items_of(v)
+        .iter()
+        .map(|item| super::support::location_of(cx, item))
+        .collect()
+}
+
+/// The vanilla dimension of a world name: `*_nether` is the Nether, `*_the_end` the End, any
+/// other world the overworld (a command cannot name a world, only a dimension).
+fn dimension_of(world: &str) -> &'static str {
+    let w = world.to_ascii_lowercase();
+    if w.ends_with("_nether") || w == "the_nether" || w == "minecraft:the_nether" {
+        "minecraft:the_nether"
+    } else if w.ends_with("_the_end") || w == "the_end" || w == "minecraft:the_end" {
+        "minecraft:the_end"
+    } else {
+        "minecraft:overworld"
+    }
+}
+
+/// `execute in <dimension>`: the start of a command for a block coordinate.
+fn in_dimension(loc: &Location) -> String {
+    format!("execute in {}", dimension_of(&loc.world))
+}
+
+/// `execute in <dimension> positioned x y z run `: the start of a command for a position.
+fn at(loc: &Location) -> String {
+    format!(
+        "{} positioned {} {} {} run ",
+        in_dimension(loc),
+        format_number(loc.x),
+        format_number(loc.y),
+        format_number(loc.z)
+    )
 }
 
 /// A `Flow::Next`, the result of every effect here.
