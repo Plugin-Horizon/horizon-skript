@@ -8,6 +8,7 @@ pub mod location;
 pub mod misc;
 pub mod player;
 pub mod text;
+pub mod world;
 
 use crate::horizon_skript_core::pattern::PatternError;
 use crate::horizon_skript_core::registry::Registry;
@@ -21,5 +22,6 @@ pub fn register(reg: &mut Registry) -> Result<(), PatternError> {
     misc::register(reg)?;
     event::register(reg)?;
     lists::register(reg)?;
+    world::register(reg)?;
     Ok(())
 }
