@@ -20,6 +20,73 @@ pub const CLASS_NAMES: &[&str] = &[
     "entity type",
 ];
 
+/// Classes beyond the core ones: entities, command senders, UUIDs, colours.
+pub const EXTRA_CLASSES: &[&str] = &["entity", "commandsender", "uuid", "color"];
+
+/// Skript types whose values are one word of a fixed set, kept as lower-case text (`survival`,
+/// `entity attack`). The words are the allowed values; an empty list takes any word, because the
+/// engine's own list is not known here.
+pub const ENUM_CLASSES: &[(&str, &[&str])] = &[
+    ("gamemode", &["survival", "creative", "adventure", "spectator"]),
+    ("difficulty", &["peaceful", "easy", "normal", "hard"]),
+    ("weathertype", &["clear", "rain", "thunder"]),
+    (
+        "soundcategory",
+        &[
+            "master", "music", "record", "weather", "block", "hostile", "neutral", "player",
+            "ambient", "voice",
+        ],
+    ),
+    ("itemrarity", &["common", "uncommon", "rare", "epic"]),
+    ("environment", &["normal", "nether", "the end"]),
+    ("damagecause", &[]),
+    ("teleportcause", &[]),
+    ("spawnreason", &[]),
+    ("healreason", &[]),
+    ("transformreason", &[]),
+    ("quitreason", &[]),
+    ("inventoryaction", &[]),
+    ("inventoryclosereason", &[]),
+    ("clicktype", &[]),
+    ("equipmentslot", &[]),
+    ("itemflag", &[]),
+    ("villagerprofession", &[]),
+    ("villagertype", &[]),
+    ("biome", &[]),
+    ("gamerule", &[]),
+    ("enchantmenttype", &[]),
+    ("potioneffecttype", &[]),
+    ("particle", &[]),
+    ("bossbarstyle", &[]),
+    ("moonphase", &[]),
+    ("treetype", &[]),
+    ("resourcepackstate", &[]),
+    ("billboard", &[]),
+    ("textalignment", &[]),
+    ("itemdisplaytransform", &[]),
+];
+
+/// Names that stand for another class: Skript's Java number types, `string`, the item and block
+/// types (a block is read as its item type here), and the entity kinds that all take an entity.
+/// An offline player is read as an online one: the host only knows players that are online.
+const ALIASES: &[(&str, &str)] = &[
+    ("string", "text"),
+    ("byte", "integer"),
+    ("short", "integer"),
+    ("long", "integer"),
+    ("float", "number"),
+    ("double", "number"),
+    ("itemstack", "item type"),
+    ("material", "item type"),
+    ("block", "item type"),
+    ("blockdata", "item type"),
+    ("offlineplayer", "player"),
+    ("livingentity", "entity"),
+    ("projectile", "entity"),
+    ("vehicle", "entity"),
+    ("inventoryholder", "entity"),
+];
+
 /// A type as a pattern names it: `number`, `numbers` (a list), `item types`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TypeName {
@@ -27,23 +94,70 @@ pub struct TypeName {
     pub plural: bool,
 }
 
-/// Resolves a pattern type name, singular or plural. `None` for unknown names.
-pub fn resolve(name: &str) -> Option<TypeName> {
-    let n = name.trim().to_ascii_lowercase();
-    for class in CLASS_NAMES {
-        if n == *class {
+/// The plural of a class name: `item type` gives `item types`, `entity` gives `entities`.
+fn plural_of(class: &str) -> String {
+    match class.strip_suffix('y') {
+        Some(stem) if !stem.ends_with(['a', 'e', 'i', 'o', 'u']) => format!("{stem}ies"),
+        _ => format!("{class}s"),
+    }
+}
+
+/// Whether `class` is one of the fixed-word enum classes.
+pub fn is_enum(class: &str) -> bool {
+    ENUM_CLASSES.iter().any(|(name, _)| *name == class)
+}
+
+/// Every class name the core knows: core, extra and enum classes (not the aliases).
+pub fn all_class_names() -> Vec<&'static str> {
+    CLASS_NAMES
+        .iter()
+        .chain(EXTRA_CLASSES)
+        .copied()
+        .chain(ENUM_CLASSES.iter().map(|(name, _)| *name))
+        .collect()
+}
+
+/// Looks one spelling up among the class names and the aliases.
+fn lookup(n: &str) -> Option<TypeName> {
+    for class in all_class_names() {
+        if n == class {
             return Some(TypeName {
                 class,
                 plural: false,
             });
         }
-        // `numbers`, `item types`, `players`: the plural adds `s` to the singular name.
-        if *class != "object" && n == format!("{class}s") {
+        // `numbers`, `item types`, `players`, `entities`.
+        if class != "object" && (n == format!("{class}s") || n == plural_of(class)) {
             return Some(TypeName {
                 class,
                 plural: true,
             });
         }
+    }
+    for (alias, core) in ALIASES {
+        let class = all_class_names().into_iter().find(|c| c == core)?;
+        if n == *alias {
+            return Some(TypeName {
+                class,
+                plural: false,
+            });
+        }
+        if n == plural_of(alias) {
+            return Some(TypeName {
+                class,
+                plural: true,
+            });
+        }
+    }
+    None
+}
+
+/// Resolves a pattern type name, singular or plural. `None` for unknown names. Names written with
+/// spaces (`game mode`, `command sender`, `offline player`) are the same as without.
+pub fn resolve(name: &str) -> Option<TypeName> {
+    let n = name.trim().to_ascii_lowercase();
+    if let Some(t) = lookup(&n) {
+        return Some(t);
     }
     if n == "objects" {
         return Some(TypeName {
@@ -51,13 +165,93 @@ pub fn resolve(name: &str) -> Option<TypeName> {
             plural: true,
         });
     }
+    if n.contains(' ') {
+        return lookup(&n.replace(' ', ""));
+    }
     None
 }
 
 /// Whether an expression of class `have` can fill a slot of class `want` (both singular).
 /// Text takes any value (it is the text form), numbers take integers, objects take everything.
 pub fn accepts(want: &str, have: &str) -> bool {
-    want == "object" || want == have || want == "text" || (want == "number" && have == "integer")
+    want == "object"
+        || want == have
+        || want == "text"
+        || (want == "number" && have == "integer")
+        || match want {
+            "entity" => matches!(have, "player" | "entity type"),
+            "commandsender" => matches!(have, "player" | "text"),
+            "uuid" => have == "text",
+            w => is_enum(w) && have == "text",
+        }
+}
+
+/// Whether `class` is an enum class with a fixed list of words, so a bare word in a script can be
+/// told from other text.
+pub fn is_strict_enum(class: &str) -> bool {
+    ENUM_CLASSES
+        .iter()
+        .any(|(name, words)| *name == class && !words.is_empty())
+}
+
+/// The words of an enum class as scripts write them: lower case, `_` and `-` read as spaces.
+pub fn enum_word(text: &str) -> String {
+    text.trim()
+        .to_lowercase()
+        .replace(['_', '-'], " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// A colour as the list `rgb(r, g, b)` makes: the names Skript knows (dye colours) or a hex code
+/// (`#rrggbb`, `rrggbb`).
+fn parse_colour(text: &str) -> Option<Value> {
+    let word = enum_word(text).replace("gray", "grey");
+    let named: Option<[i64; 3]> = match word.as_str() {
+        "black" => Some([29, 29, 33]),
+        "dark grey" => Some([71, 79, 82]),
+        "light grey" => Some([157, 157, 151]),
+        "white" => Some([249, 255, 254]),
+        "dark blue" => Some([60, 68, 170]),
+        "brown" => Some([131, 84, 50]),
+        "dark cyan" => Some([22, 156, 156]),
+        "light cyan" => Some([58, 179, 218]),
+        "dark green" => Some([94, 124, 22]),
+        "light green" => Some([128, 199, 31]),
+        "yellow" => Some([254, 216, 61]),
+        "orange" => Some([249, 128, 29]),
+        "dark red" => Some([176, 46, 38]),
+        "light red" => Some([243, 139, 170]),
+        "dark purple" => Some([137, 50, 184]),
+        "light purple" => Some([199, 78, 189]),
+        _ => None,
+    };
+    let rgb = match named {
+        Some(c) => c,
+        None => {
+            let hex = text.trim().trim_start_matches('#');
+            if hex.len() != 6 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+                return None;
+            }
+            let n = i64::from_str_radix(hex, 16).ok()?;
+            [(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff]
+        }
+    };
+    Some(Value::List(rgb.iter().map(|c| Value::Int(*c)).collect()))
+}
+
+/// `12345678-9abc-def0-1122-334455667788`, as text in lower case.
+fn parse_uuid(text: &str) -> Option<Value> {
+    let t = text.trim().to_ascii_lowercase();
+    let groups: Vec<&str> = t.split('-').collect();
+    let lengths = [8, 4, 4, 4, 12];
+    let ok = groups.len() == 5
+        && groups
+            .iter()
+            .zip(lengths)
+            .all(|(g, len)| g.len() == len && g.chars().all(|c| c.is_ascii_hexdigit()));
+    ok.then_some(Value::Text(t))
 }
 
 /// Parses a single value of the given singular class from text (a pattern's literal input, or
@@ -99,7 +293,26 @@ pub fn parse_value(class: &str, text: &str, host: &dyn Host) -> Option<Value> {
             let id = normalize_id(t)?;
             host.is_entity_type(&id).then(|| Value::EntityType(id))
         }
-        _ => None,
+        // A player by name first, then an entity type.
+        "entity" => host
+            .player_by_name(t)
+            .map(|(uuid, name)| Value::Player { uuid, name })
+            .or_else(|| parse_value("entity type", t, host)),
+        "commandsender" => {
+            if t.eq_ignore_ascii_case("console") {
+                Some(Value::Text("console".to_owned()))
+            } else {
+                parse_value("player", t, host)
+            }
+        }
+        "uuid" => parse_uuid(t),
+        "color" => parse_colour(t),
+        w => {
+            let (_, words) = ENUM_CLASSES.iter().find(|(name, _)| *name == w)?;
+            let word = enum_word(t);
+            (!word.is_empty() && (words.is_empty() || words.contains(&word.as_str())))
+                .then_some(Value::Text(word))
+        }
     }
 }
 
@@ -107,6 +320,20 @@ pub fn parse_value(class: &str, text: &str, host: &dyn Host) -> Option<Value> {
 pub fn convert(v: Value, want: &str, host: &dyn Host) -> Option<Value> {
     if want == "object" || v.class() == want {
         return Some(v);
+    }
+    // A value that already is one of the extra classes (a player is an entity and a command
+    // sender); enum classes are read from text below.
+    if EXTRA_CLASSES.contains(&want) && accepts(want, v.class()) && !matches!(v, Value::Text(_)) {
+        return Some(v);
+    }
+    if want == "color" {
+        if let Value::List(parts) = &v {
+            let channels = parts.len() == 3
+                && parts
+                    .iter()
+                    .all(|p| matches!(p, Value::Int(n) if (0..=255).contains(n)));
+            return channels.then_some(v);
+        }
     }
     match want {
         "text" => Some(Value::Text(v.to_text())),
@@ -457,6 +684,111 @@ mod tests {
             Some(Value::Bool(false))
         );
         assert_eq!(convert(Value::Bool(true), "timespan", &host), None);
+    }
+
+    #[test]
+    fn more_names_resolve_to_classes() {
+        let one = |name: &str| resolve(name).map(|t| (t.class, t.plural));
+        assert_eq!(one("game mode"), Some(("gamemode", false)));
+        assert_eq!(one("gamemodes"), Some(("gamemode", true)));
+        assert_eq!(one("entities"), Some(("entity", true)));
+        assert_eq!(one("living entity"), Some(("entity", false)));
+        assert_eq!(one("livingentities"), Some(("entity", true)));
+        assert_eq!(one("offline players"), Some(("player", true)));
+        assert_eq!(one("doubles"), Some(("number", true)));
+        assert_eq!(one("long"), Some(("integer", false)));
+        assert_eq!(one("string"), Some(("text", false)));
+        assert_eq!(one("itemstack"), Some(("item type", false)));
+        assert_eq!(one("command sender"), Some(("commandsender", false)));
+        assert_eq!(one("difficulties"), Some(("difficulty", true)));
+        assert_eq!(one("colors"), Some(("color", true)));
+        assert_eq!(one("uuid"), Some(("uuid", false)));
+        assert_eq!(one("item types"), Some(("item type", true)));
+        assert_eq!(one("nonsense"), None);
+    }
+
+    #[test]
+    fn the_new_classes_parse_their_words() {
+        use crate::horizon_skript_core::host::Recorder;
+        let host = Recorder::with_players(&[(7, "Alice")]);
+        let parse = |class: &str, text: &str| parse_value(class, text, &host);
+        assert_eq!(
+            parse("gamemode", "Creative"),
+            Some(Value::Text("creative".into()))
+        );
+        assert_eq!(parse("gamemode", "banana"), None);
+        assert_eq!(
+            parse("environment", "the_end"),
+            Some(Value::Text("the end".into()))
+        );
+        assert_eq!(
+            parse("damagecause", "ENTITY_ATTACK"),
+            Some(Value::Text("entity attack".into()))
+        );
+        assert_eq!(
+            parse("color", "dark red"),
+            Some(Value::List(vec![
+                Value::Int(176),
+                Value::Int(46),
+                Value::Int(38)
+            ]))
+        );
+        assert_eq!(
+            parse("color", "#0a141e"),
+            Some(Value::List(vec![
+                Value::Int(10),
+                Value::Int(20),
+                Value::Int(30)
+            ]))
+        );
+        assert_eq!(parse("color", "#12345"), None);
+        assert_eq!(
+            parse("uuid", "12345678-9ABC-def0-1122-334455667788"),
+            Some(Value::Text("12345678-9abc-def0-1122-334455667788".into()))
+        );
+        assert_eq!(parse("uuid", "not-a-uuid"), None);
+        assert_eq!(
+            parse("entity", "alice"),
+            Some(Value::Player {
+                uuid: 7,
+                name: "Alice".into()
+            })
+        );
+        assert_eq!(
+            parse("entity", "zombie"),
+            Some(Value::EntityType("minecraft:zombie".into()))
+        );
+        assert_eq!(
+            parse("commandsender", "Console"),
+            Some(Value::Text("console".into()))
+        );
+    }
+
+    #[test]
+    fn the_new_classes_accept_and_convert() {
+        use crate::horizon_skript_core::host::Recorder;
+        let host = Recorder::default();
+        assert!(accepts("entity", "player"));
+        assert!(accepts("entity", "entity type"));
+        assert!(!accepts("entity", "number"));
+        assert!(accepts("commandsender", "player"));
+        assert!(accepts("gamemode", "text"));
+        assert!(!accepts("gamemode", "number"));
+        assert!(accepts("uuid", "text"));
+        let alice = Value::Player {
+            uuid: 1,
+            name: "Alice".into(),
+        };
+        assert_eq!(convert(alice.clone(), "entity", &host), Some(alice));
+        let red = Value::List(vec![Value::Int(255), Value::Int(0), Value::Int(0)]);
+        assert_eq!(convert(red.clone(), "color", &host), Some(red));
+        let bad = Value::List(vec![Value::Int(256), Value::Int(0), Value::Int(0)]);
+        assert_eq!(convert(bad, "color", &host), None);
+        assert_eq!(
+            convert(Value::Text("Hard".into()), "difficulty", &host),
+            Some(Value::Text("hard".into()))
+        );
+        assert_eq!(convert(Value::Text("lunatic".into()), "difficulty", &host), None);
     }
 
     #[test]

@@ -584,7 +584,15 @@ impl<'a> Parser<'a> {
     fn bare(&self, t: &str, hint: &[&str]) -> Option<Expr> {
         for h in hint {
             match *h {
-                "player" if is_player_name(t) => return Some(Expr::PlayerName(t.to_owned())),
+                "player" | "entity" | "commandsender" if is_player_name(t) => {
+                    return Some(Expr::PlayerName(t.to_owned()));
+                }
+                // A word of a fixed set (`creative`, `hard`) or a colour name.
+                c if classes::is_strict_enum(c) || c == "color" => {
+                    if let Some(v) = classes::parse_value(c, t, self.host) {
+                        return Some(Expr::Lit(v));
+                    }
+                }
                 "item type" | "entity type" | "world" => {
                     let text = if *h == "item type" {
                         self.alias_text(t)
