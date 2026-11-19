@@ -15,6 +15,7 @@ mod particles;
 mod place;
 mod player_state;
 mod players;
+mod server;
 mod world;
 
 use crate::horizon_skript_core::error::RunError;
@@ -34,6 +35,7 @@ pub fn register(reg: &mut Registry) -> Result<(), PatternError> {
     console::register(reg)?;
     player_state::register(reg)?;
     place::register(reg)?;
+    server::register(reg)?;
     Ok(())
 }
 
