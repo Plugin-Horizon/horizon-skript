@@ -820,6 +820,49 @@ impl Manager {
     }
 }
 
+/// The permission nodes a script's text names: the `permission:` line of a command and a
+/// string literal right after `has permission` / `have permission`. Nodes with an expression
+/// in them (`%`) or with spaces cannot be known before the script runs and are left out.
+pub fn permission_nodes_in(source: &str) -> Vec<String> {
+    let literal = Regex::new(r#"(?i)\bpermissions?\s+"([^"%]+)""#).expect("a valid regex");
+    let mut out = Vec::new();
+    for raw in source.lines() {
+        let line = crate::horizon_skript_core::script::strip_comment(raw);
+        if let Some((key, value)) = line.split_once(':') {
+            if key.trim().eq_ignore_ascii_case("permission") {
+                let node = value.trim();
+                if !node.is_empty() && !node.contains(char::is_whitespace) && !node.contains('%') {
+                    out.push(node.to_owned());
+                }
+                continue;
+            }
+        }
+        for cap in literal.captures_iter(line) {
+            let node = cap[1].trim();
+            if !node.is_empty() && !node.contains(char::is_whitespace) {
+                out.push(node.to_owned());
+            }
+        }
+    }
+    out
+}
+
+/// Every permission node the `.sk` files below `dir` name (disabled files too), sorted and
+/// without duplicates. An unreadable folder or file gives nothing for it.
+pub fn scan_permission_nodes(dir: &Path) -> Vec<String> {
+    let mut files = Vec::new();
+    if collect(dir, "", &mut files).is_err() {
+        return Vec::new();
+    }
+    let mut nodes = std::collections::BTreeSet::new();
+    for rel in files {
+        if let Ok(text) = fs::read_to_string(dir.join(&rel)) {
+            nodes.extend(permission_nodes_in(&text));
+        }
+    }
+    nodes.into_iter().collect()
+}
+
 /// Collects the `.sk` files below `base`, as paths relative to it with `/` separators.
 fn collect(dir: &Path, prefix: &str, out: &mut Vec<String>) -> std::io::Result<()> {
     for entry in fs::read_dir(dir)? {

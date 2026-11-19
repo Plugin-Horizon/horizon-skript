@@ -14,7 +14,7 @@ use crate::horizon_skript_core::Registry;
 use crate::horizon_skript_core::host::{
     Actions, EntityInfo, Host as SkHost, ItemStack as SkItemStack, ParticleSpec, PlayerState,
 };
-use crate::horizon_skript_core::manager::Manager;
+use crate::horizon_skript_core::manager::{self, Manager};
 use crate::horizon_skript_core::run::Event;
 use crate::horizon_skript_core::value::{Location, Value};
 use mod_api::{
@@ -24,7 +24,8 @@ use mod_api::{
     PlayerCommandsSentEvent, PlayerLoggedInEvent, PlayerLoggedOutEvent, PlayerRef, RegisterCommandsEvent,
     RunModCommandEvent, ServerAboutToStartEvent, ServerChatEvent, ServerHost, ServerStoppingEvent,
     ServerTickEvent, ServerTickPhase, StatType, Text, ParticleKey, Registrar, RegistrationContext,
-    NodeDefault, PermissionGatherNodesEvent, PermissionLevel, PermissionNode, PermissionValueType,
+    NodeDefault, PermissionError, PermissionGatherNodesEvent, PermissionLevel, PermissionNode,
+    PermissionValueType,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -39,6 +40,14 @@ const SKRIPT_NODE: &str = "skript.admin";
 fn skript_node() -> PermissionNode {
     PermissionNode::new(SKRIPT_NODE, PermissionValueType::Boolean)
 }
+/// The other permissions of Skript's plugin.yml (`skript.admin` is `SKRIPT_NODE`), all default op.
+/// Declared so they can be granted; `skript.reloadnotify` is read when a script is reloaded.
+const PLUGIN_NODES: [&str; 4] = [
+    SKRIPT_NODE,
+    "skript.effectcommands",
+    "skript.reloadnotify",
+    "skript.see_runtime_errors",
+];
 /// Bukkit's default line for a refused command (red, two sentences).
 const NO_PERMISSION: &str = "\u{a7}cI'm sorry, but you do not have permission to perform this command. Please contact the server administrators if you believe that this is in error.";
 /// The folder scripts are read from, relative to the server's folder (Skript's own default).
@@ -161,20 +170,22 @@ impl SkHost for Bridge<'_> {
         })
     }
 
-    // The scripts' `permission:` nodes and `player has permission`. Script nodes are not declared at
-    // gathering (they come from the scripts at run time), so a typed query for one is refused as
-    // unregistered. HMOD-GAP(script-permission-nodes): every script permission check denies, operators
-    // included; the operator level 2 fallback is gone for these nodes.
+    // The scripts' `permission:` nodes and `player has permission`. The nodes the script files name
+    // are declared at gathering (operator level 2, as Bukkit's default `op`). A node nobody declared
+    // (a dynamic one such as `has permission "%{_x}%"`) is answered as Bukkit answers an unknown node:
+    // for operators only. Any other error is a denial.
     fn has_permission(&self, uuid: u128, node: &str) -> bool {
         self.with(|h| {
             let Some(p) = h.player(uuid) else {
                 return false;
             };
-            p.permission_bool(
-                h,
-                &PermissionNode::new(node, PermissionValueType::Boolean),
-            )
-            .unwrap_or(false)
+            match p.permission_bool(h, &PermissionNode::new(node, PermissionValueType::Boolean)) {
+                Ok(answer) => answer,
+                Err(PermissionError::Unregistered) => {
+                    p.permission_level(&*h).is_some_and(|l| l >= 2)
+                }
+                Err(_) => false,
+            }
         })
     }
 
@@ -934,12 +945,23 @@ impl Hooks for Skript {
         self.with_manager(host, |_, m, b| m.fire(b, "server stop", Event::default()));
     }
 
-    /// Declares `skript.admin` (plugin.yml default op: operator level 2 without a permission provider's answer).
+    /// Declares the plugin.yml permissions (default op: operator level 2 without a permission provider's
+    /// answer) and every node the script files name (`permission:` lines, `has permission "..."`).
     fn permission_gather_nodes(&self, event: &mut PermissionGatherNodesEvent<'_>) {
-        let _ = event.nodes.add(
-            skript_node(),
-            NodeDefault::Level(PermissionLevel::from_level(2)),
-        );
+        let folder = lock(&self.st)
+            .folder
+            .clone()
+            .unwrap_or_else(|| DEFAULT_FOLDER.to_owned());
+        let mut names: Vec<String> = PLUGIN_NODES.iter().map(|n| (*n).to_owned()).collect();
+        names.extend(manager::scan_permission_nodes(std::path::Path::new(&folder)));
+        names.sort();
+        names.dedup();
+        for name in names {
+            let _ = event.nodes.add(
+                PermissionNode::new(name, PermissionValueType::Boolean),
+                NodeDefault::Level(PermissionLevel::from_level(2)),
+            );
+        }
     }
 
     fn register_commands(&self, host: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {
