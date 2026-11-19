@@ -921,6 +921,78 @@ fn player_dimension(h: &dyn ServerHost, p: PlayerRef) -> Option<String> {
     p.dimension(h).map(|d| d.to_string())
 }
 
+/// The world a dimension id stands for, with the same names `block_location` gives.
+fn dimension_world(level_name: &str, dimension: &str) -> String {
+    match block_location(level_name, dimension, [0, 0, 0]) {
+        Value::Location(l) => l.world,
+        _ => dimension.to_owned(),
+    }
+}
+
+/// A point of a dimension as a location value.
+fn point_location(level_name: &str, dimension: &str, p: [f64; 3]) -> Value {
+    Value::Location(Location {
+        world: dimension_world(level_name, dimension),
+        x: p[0],
+        y: p[1],
+        z: p[2],
+        yaw: 0.0,
+        pitch: 0.0,
+    })
+}
+
+/// The lower-case game mode name a script reads.
+fn game_mode_name(mode: &GameMode) -> &'static str {
+    match mode {
+        GameMode::Creative => "creative",
+        GameMode::Adventure => "adventure",
+        GameMode::Spectator => "spectator",
+        _ => "survival",
+    }
+}
+
+/// An item id as an item type value.
+fn item_value(id: &str, amount: i64) -> Value {
+    Value::ItemType {
+        id: id.to_owned(),
+        amount,
+        name: None,
+    }
+}
+
+/// The dimension the player with this UUID is in.
+fn player_dim_of(host: &mut dyn ServerHost, uuid: u128) -> Option<String> {
+    host.player(uuid).and_then(|p| player_dimension(&*host, p))
+}
+
+/// Fires the event `name` for `uuid` (when there is a player) with the extra values, and says
+/// whether a trigger cancelled it. The player's name comes from the join hook.
+fn fire_event(
+    sk: &Skript,
+    host: &mut dyn ServerHost,
+    name: &str,
+    uuid: Option<u128>,
+    values: Vec<(&'static str, Value)>,
+) -> bool {
+    let mut data = match uuid {
+        Some(u) => player_event(sk, u),
+        None => Event::default(),
+    };
+    for (k, v) in values {
+        data = data.with(k, v);
+    }
+    matches!(fire_cancellable(sk, host, &[name], data), Flow::Cancel)
+}
+
+/// The answer of a hook that may veto: cancel when a trigger cancelled the event.
+fn verdict(cancelled: bool) -> Flow {
+    if cancelled {
+        Flow::Cancel
+    } else {
+        Flow::Continue
+    }
+}
+
 #[mod_api::horizon_mod]
 impl Hooks for Skript {
     fn register_configs(&self, _: HostSide, event: &mut mod_api::RegisterConfigsEvent<'_>) {
@@ -1210,8 +1282,7 @@ impl Hooks for Skript {
         Flow::Continue
     }
 
-    // TODO(arismoko-api: player_move): no move hook on arismoko (only `vehicle_moved` and
-    // `player_teleported`). Skript's `move` trigger never fires; the lobby scripts do not use it.
+    // The `move` trigger fires from the `player_move` hook below.
 
     /// Tab completion of `/skript` and `/sk`: the sub-commands, `all|scripts|config|aliases|last` and
     /// the script names, for a sender with skript.admin.
@@ -1298,5 +1369,426 @@ impl Hooks for Skript {
         } else {
             Flow::Continue
         }
+    }
+
+    // -- more events (`syntax/events/misc.rs` lists the values each one carries). Hooks that can
+    // veto set the cancel flag of their event when a trigger cancelled it.
+
+    // UNVERIFIED: the field names of the events below are the reference's.
+    fn player_teleported(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::PlayerTeleportedEvent<'_>,
+    ) {
+        let level = lock(&self.st).level_name.clone();
+        let values = vec![
+            ("from", point_location(&level, event.dimension, event.from)),
+            ("to", point_location(&level, event.dimension, event.to)),
+        ];
+        fire_event(self, host, "teleport", Some(event.player), values);
+    }
+
+    fn player_changed_dimension(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::PlayerChangedDimensionEvent<'_>,
+    ) {
+        let level = lock(&self.st).level_name.clone();
+        let values = vec![
+            ("from", Value::World(dimension_world(&level, event.from))),
+            ("to", Value::World(dimension_world(&level, event.to))),
+        ];
+        fire_event(self, host, "world change", Some(event.player), values);
+    }
+
+    fn player_game_mode_changed(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::PlayerGameModeChangedEvent<'_>,
+    ) -> Flow {
+        let values = vec![
+            ("from", Value::Text(game_mode_name(&event.from).to_owned())),
+            ("gamemode", Value::Text(game_mode_name(&*event.to).to_owned())),
+        ];
+        let cancelled = fire_event(self, host, "game mode change", Some(event.player), values);
+        if cancelled {
+            event.cancelled = true;
+        }
+        verdict(cancelled)
+    }
+
+    fn player_toggle_flight(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::PlayerToggleFlightEvent<'_>,
+    ) -> Flow {
+        let values = vec![("state", Value::Bool(event.flying))];
+        let cancelled = fire_event(self, host, "flight toggle", Some(event.player), values);
+        if cancelled {
+            event.cancelled = true;
+        }
+        verdict(cancelled)
+    }
+
+    fn player_toggle_sneak(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::PlayerToggleSneakEvent<'_>,
+    ) {
+        let values = vec![("state", Value::Bool(event.sneaking))];
+        fire_event(self, host, "sneak toggle", Some(event.player), values);
+    }
+
+    fn player_sprint(&self, host: &mut dyn ServerHost, event: &mut mod_api::PlayerSprintEvent<'_>) {
+        let values = vec![("state", Value::Bool(event.sprinting))];
+        fire_event(self, host, "sprint toggle", Some(event.player), values);
+    }
+
+    fn player_jump(&self, host: &mut dyn ServerHost, event: &mut mod_api::PlayerJumpEvent<'_>) {
+        fire_event(self, host, "jump", Some(event.player), Vec::new());
+    }
+
+    fn player_container_open(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::PlayerContainerOpenEvent<'_>,
+    ) {
+        let level = lock(&self.st).level_name.clone();
+        let mut values = Vec::new();
+        if let Some(pos) = event.pos {
+            values.push(("location", block_location(&level, event.dimension, pos)));
+        }
+        fire_event(self, host, "inventory open", Some(event.player), values);
+    }
+
+    fn player_container_close(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::PlayerContainerCloseEvent<'_>,
+    ) {
+        let level = lock(&self.st).level_name.clone();
+        let mut values = Vec::new();
+        if let Some(pos) = event.pos {
+            values.push(("location", block_location(&level, event.dimension, pos)));
+        }
+        fire_event(self, host, "inventory close", Some(event.player), values);
+    }
+
+    fn player_destroy_item(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::PlayerDestroyItemEvent<'_>,
+    ) {
+        let values = vec![("item", item_value(event.item, 1))];
+        fire_event(self, host, "item break", Some(event.player), values);
+    }
+
+    fn food_level_changed(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::FoodLevelChangedEvent<'_>,
+    ) -> Flow {
+        let values = vec![
+            ("from", Value::Int(i64::from(event.from))),
+            ("to", Value::Int(i64::from(event.to))),
+        ];
+        let cancelled = fire_event(self, host, "hunger change", Some(event.player), values);
+        if cancelled {
+            event.cancelled = true;
+        }
+        verdict(cancelled)
+    }
+
+    fn player_level_change(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::PlayerLevelChangeEvent<'_>,
+    ) {
+        let values = vec![
+            ("from", Value::Int(i64::from(event.from))),
+            ("to", Value::Int(i64::from(event.to))),
+        ];
+        fire_event(self, host, "level change", Some(event.player), values);
+    }
+
+    fn player_xp_change(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::PlayerXpChangeEvent<'_>,
+    ) -> Flow {
+        let values = vec![("number", Value::Int(i64::from(event.amount)))];
+        let cancelled = fire_event(self, host, "experience change", Some(event.player), values);
+        if cancelled {
+            event.cancelled = true;
+        }
+        verdict(cancelled)
+    }
+
+    fn player_kicked(&self, host: &mut dyn ServerHost, event: &mut mod_api::PlayerKickedEvent<'_>) {
+        let mut data = player_event(self, event.player);
+        data.message = Some(event.reason.to_owned());
+        let _ = fire_cancellable(self, host, &["kick"], data);
+    }
+
+    // Skript's `move` fires when the player enters another block, not on every packet.
+    fn player_move(&self, host: &mut dyn ServerHost, event: &mut mod_api::PlayerMoveEvent) -> Flow {
+        let block = |p: [f64; 3]| [p[0].floor() as i64, p[1].floor() as i64, p[2].floor() as i64];
+        if block(event.from) == block(event.to) {
+            return Flow::Continue;
+        }
+        let Some(dimension) = player_dim_of(host, event.player) else {
+            return Flow::Continue;
+        };
+        let level = lock(&self.st).level_name.clone();
+        let values = vec![
+            ("from", point_location(&level, &dimension, event.from)),
+            ("to", point_location(&level, &dimension, event.to)),
+        ];
+        let cancelled = fire_event(self, host, "move", Some(event.player), values);
+        if cancelled {
+            event.cancelled = true;
+        }
+        verdict(cancelled)
+    }
+
+    fn player_swap_hands(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::PlayerSwapHandsEvent<'_>,
+    ) -> Flow {
+        let cancelled = fire_event(self, host, "item swap", Some(event.player), Vec::new());
+        if cancelled {
+            event.cancelled = true;
+        }
+        verdict(cancelled)
+    }
+
+    fn player_bed_enter(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::PlayerBedEnterEvent<'_>,
+    ) -> Flow {
+        let level = lock(&self.st).level_name.clone();
+        let mut values = Vec::new();
+        if let Some(dimension) = player_dim_of(host, event.player) {
+            values.push(("location", block_location(&level, &dimension, event.pos)));
+        }
+        let cancelled = fire_event(self, host, "bed enter", Some(event.player), values);
+        if cancelled {
+            event.cancelled = true;
+        }
+        verdict(cancelled)
+    }
+
+    fn player_bed_leave(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::PlayerBedLeaveEvent<'_>,
+    ) {
+        let level = lock(&self.st).level_name.clone();
+        let mut values = Vec::new();
+        if let Some(dimension) = player_dim_of(host, event.player) {
+            values.push(("location", block_location(&level, &dimension, event.pos)));
+        }
+        fire_event(self, host, "bed leave", Some(event.player), values);
+    }
+
+    fn item_toss(&self, host: &mut dyn ServerHost, event: &mut mod_api::ItemTossEvent) -> Flow {
+        let cancelled = fire_event(self, host, "drop", Some(event.player), Vec::new());
+        if cancelled {
+            event.cancelled = true;
+        }
+        verdict(cancelled)
+    }
+
+    fn player_riptide(&self, host: &mut dyn ServerHost, event: &mut mod_api::PlayerRiptideEvent<'_>) {
+        fire_event(self, host, "riptide", Some(event.player), Vec::new());
+    }
+
+    fn player_arm_swing(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::PlayerArmSwingEvent<'_>,
+    ) {
+        fire_event(self, host, "arm swing", Some(event.player), Vec::new());
+    }
+
+    fn weather_change(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::WeatherChangeEvent<'_>,
+    ) -> Flow {
+        let level = lock(&self.st).level_name.clone();
+        let weather = if event.thundering {
+            "thunder"
+        } else if event.raining {
+            "rain"
+        } else {
+            "clear"
+        };
+        let values = vec![
+            ("world", Value::World(dimension_world(&level, event.dimension))),
+            ("weather", Value::Text(weather.to_owned())),
+        ];
+        let cancelled = fire_event(self, host, "weather change", None, values);
+        if cancelled {
+            event.cancelled = true;
+        }
+        verdict(cancelled)
+    }
+
+    fn mob_spawned(&self, host: &mut dyn ServerHost, event: &mut mod_api::MobSpawnedEvent<'_>) {
+        let level = lock(&self.st).level_name.clone();
+        let values = vec![
+            ("entity", Value::EntityType(event.kind.to_owned())),
+            ("location", point_location(&level, event.dimension, event.pos)),
+        ];
+        fire_event(self, host, "spawn", None, values);
+    }
+
+    fn lightning_strike(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::LightningStrikeEvent<'_>,
+    ) -> Flow {
+        let level = lock(&self.st).level_name.clone();
+        let mut values = Vec::new();
+        if let Some(dimension) = event.player.and_then(|u| player_dim_of(host, u)) {
+            values.push(("location", block_location(&level, &dimension, event.pos)));
+        }
+        let cancelled = fire_event(self, host, "lightning strike", event.player, values);
+        if cancelled {
+            event.cancelled = true;
+        }
+        verdict(cancelled)
+    }
+
+    fn bucket_empty(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::BucketEmptyEvent<'_>,
+    ) -> Flow {
+        let level = lock(&self.st).level_name.clone();
+        let mut values = Vec::new();
+        if let Some(dimension) = player_dim_of(host, event.player) {
+            values.push(("location", block_location(&level, &dimension, event.pos)));
+        }
+        let cancelled = fire_event(self, host, "bucket empty", Some(event.player), values);
+        if cancelled {
+            event.cancelled = true;
+        }
+        verdict(cancelled)
+    }
+
+    fn entity_tame(&self, host: &mut dyn ServerHost, event: &mut mod_api::EntityTameEvent<'_>) {
+        let values = vec![("entity", Value::EntityType(event.kind.to_owned()))];
+        fire_event(self, host, "tame", event.owner, values);
+    }
+
+    fn entity_breed(&self, host: &mut dyn ServerHost, _event: &mut mod_api::EntityBreedEvent) {
+        fire_event(self, host, "breed", None, Vec::new());
+    }
+
+    fn entity_toggle_glide(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::EntityToggleGlideEvent<'_>,
+    ) {
+        let values = vec![("state", Value::Bool(event.gliding))];
+        fire_event(self, host, "glide toggle", Some(event.player), values);
+    }
+
+    fn player_fish(&self, host: &mut dyn ServerHost, event: &mut mod_api::PlayerFishEvent<'_>) -> Flow {
+        let cancelled = fire_event(self, host, "fish", Some(event.player), Vec::new());
+        if cancelled {
+            event.cancelled = true;
+        }
+        verdict(cancelled)
+    }
+
+    fn player_item_mend(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::PlayerItemMendEvent<'_>,
+    ) {
+        let values = vec![
+            ("item", item_value(event.item, 1)),
+            ("number", Value::Int(i64::from(event.repair))),
+        ];
+        fire_event(self, host, "item mend", Some(event.player), values);
+    }
+
+    fn entity_mount(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::EntityMountEvent<'_>,
+    ) -> Flow {
+        let values = vec![
+            ("entity", Value::EntityType(event.kind.to_owned())),
+            ("vehicle", Value::EntityType(event.vehicle_kind.to_owned())),
+        ];
+        let name = if event.mounting { "mount" } else { "dismount" };
+        let cancelled = fire_event(self, host, name, None, values);
+        if cancelled {
+            event.cancelled = true;
+        }
+        verdict(cancelled)
+    }
+
+    fn player_edit_book(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::PlayerEditBookEvent<'_>,
+    ) -> Flow {
+        let values = vec![("number", Value::Int(i64::from(event.pages)))];
+        let name = if event.signing { "book sign" } else { "book edit" };
+        let cancelled = fire_event(self, host, name, Some(event.player), values);
+        if cancelled {
+            event.cancelled = true;
+        }
+        verdict(cancelled)
+    }
+
+    fn player_pickup_arrow(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::PlayerPickupArrowEvent<'_>,
+    ) {
+        let values = vec![("item", item_value(event.item, 1))];
+        fire_event(self, host, "pick up arrow", Some(event.player), values);
+    }
+
+    fn player_trade(&self, host: &mut dyn ServerHost, event: &mut mod_api::PlayerTradeEvent<'_>) {
+        fire_event(self, host, "trade", Some(event.player), Vec::new());
+    }
+
+    fn entity_shoot_bow(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::EntityShootBowEvent<'_>,
+    ) {
+        fire_event(self, host, "shoot", Some(event.player), Vec::new());
+    }
+
+    fn item_spawn(&self, host: &mut dyn ServerHost, event: &mut mod_api::ItemSpawnEvent<'_>) {
+        // The event has no dimension; the item's position is read in the main world.
+        let level = lock(&self.st).level_name.clone();
+        let values = vec![
+            ("item", item_value(event.item, i64::from(event.count))),
+            ("number", Value::Int(i64::from(event.count))),
+            (
+                "location",
+                point_location(&level, "minecraft:overworld", event.pos),
+            ),
+        ];
+        fire_event(self, host, "item spawn", None, values);
+    }
+
+    fn explosion_prime(
+        &self,
+        host: &mut dyn ServerHost,
+        _event: &mut mod_api::ExplosionPrimeEvent,
+    ) {
+        fire_event(self, host, "explosion prime", None, Vec::new());
     }
 }
