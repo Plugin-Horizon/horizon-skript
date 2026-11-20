@@ -27,8 +27,11 @@
 //! action where the engine lets the hook cancel it (see GAPS.md in the glue).
 
 mod block;
+mod craft;
 mod misc;
 mod player;
+mod player_more;
+mod world;
 
 use crate::horizon_skript_core::pattern::PatternError;
 use crate::horizon_skript_core::registry::Registry;
@@ -38,6 +41,9 @@ pub fn register(reg: &mut Registry) -> Result<(), PatternError> {
     player::register(reg)?;
     block::register(reg)?;
     misc::register(reg)?;
+    world::register(reg)?;
+    player_more::register(reg)?;
+    craft::register(reg)?;
     reg.add_event("server start", &["(server|skript) (start|load|enable)"])?;
     reg.add_event("server stop", &["(server|skript) (stop|unload|disable)"])?;
     Ok(())
@@ -51,7 +57,8 @@ mod tests {
     fn event_names_are_registered_with_skripts_patterns() {
         let reg = Registry::new();
         let (_, _, _, events) = reg.counts();
-        // join, quit, chat, load, unload (builtins), the 13 of this group and the 38 of `misc`.
-        assert_eq!(events, 56);
+        // join, quit, chat, load, unload (builtins), the 13 of this group, the 38 of `misc`,
+        // the 12 of `world`, the 11 of `player_more` and the 7 of `craft`.
+        assert_eq!(events, 86);
     }
 }

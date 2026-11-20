@@ -1791,4 +1791,274 @@ impl Hooks for Skript {
     ) {
         fire_event(self, host, "explosion prime", None, Vec::new());
     }
+
+    fn vehicle_create(&self, host: &mut dyn ServerHost, event: &mut mod_api::VehicleCreateEvent<'_>) {
+        let level = lock(&self.st).level_name.clone();
+        let values = vec![
+            ("entity", Value::EntityType(event.kind.to_owned())),
+            ("location", point_location(&level, "minecraft:overworld", event.pos)),
+        ];
+        fire_event(self, host, "vehicle create", None, values);
+    }
+
+    fn vehicle_destroy(&self, host: &mut dyn ServerHost, event: &mut mod_api::VehicleDestroyEvent<'_>) {
+        let level = lock(&self.st).level_name.clone();
+        let values = vec![
+            ("entity", Value::EntityType(event.kind.to_owned())),
+            ("location", point_location(&level, "minecraft:overworld", event.pos)),
+        ];
+        fire_event(self, host, "vehicle destroy", None, values);
+    }
+
+    fn vehicle_damage(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::VehicleDamageEvent<'_>,
+    ) -> Flow {
+        let values = vec![
+            ("entity", Value::EntityType(event.kind.to_owned())),
+            ("number", Value::Num(f64::from(event.damage))),
+        ];
+        let cancelled = fire_event(self, host, "vehicle damage", None, values);
+        if cancelled {
+            event.cancelled = true;
+        }
+        verdict(cancelled)
+    }
+
+    fn vehicle_moved(&self, host: &mut dyn ServerHost, event: &mut mod_api::VehicleMovedEvent<'_>) {
+        let level = lock(&self.st).level_name.clone();
+        let values = vec![
+            ("entity", Value::EntityType(event.kind.to_owned())),
+            ("from", point_location(&level, "minecraft:overworld", event.from)),
+            ("to", point_location(&level, "minecraft:overworld", event.to)),
+        ];
+        fire_event(self, host, "vehicle move", event.player, values);
+    }
+
+    fn portal_create(&self, host: &mut dyn ServerHost, event: &mut mod_api::PortalCreateEvent<'_>) {
+        let level = lock(&self.st).level_name.clone();
+        let values = vec![("location", block_location(&level, event.dimension, event.pos))];
+        fire_event(self, host, "portal create", None, values);
+    }
+
+    fn entity_portal(&self, host: &mut dyn ServerHost, event: &mut mod_api::EntityPortalEvent<'_>) {
+        let level = lock(&self.st).level_name.clone();
+        let values = vec![("location", block_location(&level, event.dimension, event.pos))];
+        fire_event(self, host, "portal enter", None, values);
+    }
+
+    fn chunk_load(&self, host: &mut dyn ServerHost, event: &mut mod_api::ChunkLoadEvent<'_>) {
+        let level = lock(&self.st).level_name.clone();
+        let origin = [f64::from(event.chunk[0]) * 16.0, 0.0, f64::from(event.chunk[1]) * 16.0];
+        let values = vec![("location", point_location(&level, event.dimension, origin))];
+        fire_event(self, host, "chunk load", None, values);
+    }
+
+    fn chunk_unload(&self, host: &mut dyn ServerHost, event: &mut mod_api::ChunkUnloadEvent<'_>) {
+        let level = lock(&self.st).level_name.clone();
+        let origin = [f64::from(event.chunk[0]) * 16.0, 0.0, f64::from(event.chunk[1]) * 16.0];
+        let values = vec![("location", point_location(&level, event.dimension, origin))];
+        fire_event(self, host, "chunk unload", None, values);
+    }
+
+    fn explosion_detonate(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::ExplosionDetonateEvent<'_>,
+    ) {
+        let level = lock(&self.st).level_name.clone();
+        let values = vec![("location", point_location(&level, event.dimension, event.center))];
+        fire_event(self, host, "explode", None, values);
+    }
+
+    fn item_despawn(&self, host: &mut dyn ServerHost, event: &mut mod_api::ItemDespawnEvent<'_>) {
+        let level = lock(&self.st).level_name.clone();
+        let values = vec![
+            ("item", item_value(event.item, i64::from(event.count))),
+            ("number", Value::Int(i64::from(event.count))),
+            ("location", point_location(&level, "minecraft:overworld", event.pos)),
+        ];
+        fire_event(self, host, "item despawn", None, values);
+    }
+
+    fn anvil_damaged(&self, host: &mut dyn ServerHost, event: &mut mod_api::AnvilDamagedEvent<'_>) {
+        let level = lock(&self.st).level_name.clone();
+        let values = vec![("location", block_location(&level, event.dimension, event.pos))];
+        fire_event(self, host, "anvil damage", None, values);
+    }
+
+    fn projectile_impact(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::ProjectileImpactEvent<'_>,
+    ) -> Flow {
+        let level = lock(&self.st).level_name.clone();
+        let mut values = vec![("location", point_location(&level, event.dimension, event.at))];
+        if event.entity.is_some() {
+            values.push(("entity", Value::EntityType(event.entity_kind.to_owned())));
+        }
+        let cancelled = fire_event(self, host, "projectile hit", None, values);
+        if cancelled {
+            event.cancelled = true;
+        }
+        verdict(cancelled)
+    }
+
+    fn player_pick_item(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::PlayerPickItemEvent<'_>,
+    ) -> Flow {
+        let level = lock(&self.st).level_name.clone();
+        let mut values = Vec::new();
+        if let Some(dimension) = player_dim_of(host, event.player) {
+            values.push(("location", block_location(&level, &dimension, event.pos)));
+        }
+        let cancelled = fire_event(self, host, "pick item", Some(event.player), values);
+        if cancelled {
+            event.cancelled = true;
+        }
+        verdict(cancelled)
+    }
+
+    fn player_stop_using_item(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::PlayerStopUsingItemEvent<'_>,
+    ) {
+        fire_event(self, host, "stop using item", Some(event.player), Vec::new());
+    }
+
+    fn player_ready_arrow(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::PlayerReadyArrowEvent<'_>,
+    ) {
+        let values = vec![("item", item_value(event.arrow, 1))];
+        fire_event(self, host, "ready arrow", Some(event.player), values);
+    }
+
+    fn player_deep_sleep(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::PlayerDeepSleepEvent<'_>,
+    ) {
+        fire_event(self, host, "deep sleep", Some(event.player), Vec::new());
+    }
+
+    fn player_egg_throw(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::PlayerEggThrowEvent<'_>,
+    ) {
+        fire_event(self, host, "egg throw", Some(event.player), Vec::new());
+    }
+
+    fn player_elytra_boost(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::PlayerElytraBoostEvent<'_>,
+    ) {
+        fire_event(self, host, "elytra boost", Some(event.player), Vec::new());
+    }
+
+    fn player_bucket_entity(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::PlayerBucketEntityEvent<'_>,
+    ) {
+        let values = vec![("entity", Value::EntityType(event.entity.to_owned()))];
+        fire_event(self, host, "bucket entity", Some(event.player), values);
+    }
+
+    fn player_change_beacon_effect(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::PlayerChangeBeaconEffectEvent<'_>,
+    ) {
+        fire_event(self, host, "beacon effect change", Some(event.player), Vec::new());
+    }
+
+    fn player_input(&self, host: &mut dyn ServerHost, event: &mut mod_api::PlayerInputEvent<'_>) {
+        let values = vec![("number", Value::Int(i64::from(event.flags)))];
+        fire_event(self, host, "player input", Some(event.player), values);
+    }
+
+    fn player_exp_cooldown_change(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::PlayerExpCooldownChangeEvent<'_>,
+    ) {
+        let values = vec![("number", Value::Int(i64::from(event.ticks)))];
+        fire_event(self, host, "experience cooldown change", Some(event.player), values);
+    }
+
+    fn player_stonecutter_recipe_select(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::PlayerStonecutterRecipeSelectEvent<'_>,
+    ) {
+        let values = vec![("number", Value::Int(i64::from(event.recipe)))];
+        fire_event(self, host, "stonecutter recipe select", Some(event.player), values);
+    }
+
+    fn item_crafted(&self, host: &mut dyn ServerHost, event: &mut mod_api::ItemCraftedEvent<'_>) {
+        fire_event(self, host, "craft", Some(event.player), Vec::new());
+    }
+
+    fn prepare_item_enchant(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::PrepareItemEnchantEvent<'_>,
+    ) {
+        let level = lock(&self.st).level_name.clone();
+        let mut values = Vec::new();
+        if let Some(dimension) = player_dim_of(host, event.player) {
+            values.push(("location", block_location(&level, &dimension, event.pos)));
+        }
+        fire_event(self, host, "prepare enchant", Some(event.player), values);
+    }
+
+    fn enchant_item(&self, host: &mut dyn ServerHost, event: &mut mod_api::EnchantItemEvent<'_>) {
+        let level = lock(&self.st).level_name.clone();
+        let mut values = vec![("number", Value::Int(i64::from(event.levels)))];
+        if let Some(dimension) = player_dim_of(host, event.player) {
+            values.push(("location", block_location(&level, &dimension, event.pos)));
+        }
+        fire_event(self, host, "enchant", Some(event.player), values);
+    }
+
+    fn furnace_smelt(&self, host: &mut dyn ServerHost, event: &mut mod_api::FurnaceSmeltEvent<'_>) {
+        let level = lock(&self.st).level_name.clone();
+        let values = vec![
+            ("location", block_location(&level, "minecraft:overworld", event.pos)),
+            ("item", item_value(event.result, 1)),
+        ];
+        fire_event(self, host, "furnace smelt", None, values);
+    }
+
+    fn brewing_complete(&self, host: &mut dyn ServerHost, event: &mut mod_api::BrewingCompleteEvent) {
+        let level = lock(&self.st).level_name.clone();
+        let values = vec![("location", block_location(&level, "minecraft:overworld", event.pos))];
+        fire_event(self, host, "brewing complete", None, values);
+    }
+
+    fn brewing_start(&self, host: &mut dyn ServerHost, event: &mut mod_api::BrewingStartEvent<'_>) {
+        let level = lock(&self.st).level_name.clone();
+        let values = vec![
+            ("location", block_location(&level, "minecraft:overworld", event.pos)),
+            ("item", item_value(event.ingredient, 1)),
+        ];
+        fire_event(self, host, "brewing start", None, values);
+    }
+
+    fn brewing_fuel(&self, host: &mut dyn ServerHost, event: &mut mod_api::BrewingFuelEvent<'_>) {
+        let level = lock(&self.st).level_name.clone();
+        let values = vec![
+            ("location", block_location(&level, "minecraft:overworld", event.pos)),
+            ("item", item_value(event.fuel, 1)),
+        ];
+        fire_event(self, host, "brewing fuel", None, values);
+    }
 }
