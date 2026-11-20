@@ -1,5 +1,9 @@
 # horizon-skript
 
+## Port status
+
+Compared with Skript 2.17.1 (19172ca): **31.0 %** of the original's commands, permissions, config keys, messages and features work today; **31.0 %** once our open Horizon PRs are merged; **31.3 %** with the engine changes we are writing; **31.6 %** with the newest Horizon SDK. Counted on 362/1168 items (see HMOD_PORT.md). Status: not yet compiled after the 2026-11-20 round.
+
 > **Unofficial Rust port of Skript for the Horizon server (https://github.com/arismoko/horizon). Not affiliated with or endorsed by the Skript authors.**
 
 The Skript scripting language for [Horizon](https://github.com/arismoko/horizon) servers, as a
