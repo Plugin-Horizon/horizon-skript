@@ -16,6 +16,7 @@ mod place;
 mod player_state;
 mod players;
 mod server;
+mod sorting;
 mod variables;
 mod world;
 
@@ -38,6 +39,7 @@ pub fn register(reg: &mut Registry) -> Result<(), PatternError> {
     place::register(reg)?;
     server::register(reg)?;
     variables::register(reg)?;
+    sorting::register(reg)?;
     Ok(())
 }
 
