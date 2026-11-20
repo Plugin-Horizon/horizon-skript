@@ -134,6 +134,11 @@ pub trait Host {
     fn equipment(&self, _uuid: u128, _slot: &str) -> Option<ItemStack> {
         None
     }
+    /// Appends a line to a log file of the scripts' log folder (`log "x" to file "name"`), by the
+    /// file's name without folders. False when the host cannot write it.
+    fn append_log(&self, _file: &str, _line: &str) -> bool {
+        false
+    }
     /// A pseudo-random number in `[0, 1)`. The default seeds from the standard library's random
     /// state; the glue may use the engine's generator instead.
     fn random_unit(&self) -> f64 {
@@ -370,6 +375,10 @@ impl Host for Recorder {
             .iter()
             .find(|(u, _)| *u == uuid)
             .map(|(_, s)| s.clone())
+    }
+    fn append_log(&self, file: &str, line: &str) -> bool {
+        self.acted.borrow_mut().push(format!("logfile {file} {line}"));
+        true
     }
     fn equipment(&self, uuid: u128, slot: &str) -> Option<ItemStack> {
         self.equipment

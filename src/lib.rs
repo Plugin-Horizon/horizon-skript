@@ -151,6 +151,25 @@ impl SkHost for Bridge<'_> {
         eprintln!("{line}");
     }
 
+    // `log "x" to file "name"`: one line appended to plugins/Skript/logs/<name>. The core already
+    // refused names with folders; this checks again before touching the disk.
+    fn append_log(&self, file: &str, line: &str) -> bool {
+        use std::io::Write;
+        if file.is_empty() || file.contains(['/', '\\']) || file.contains("..") {
+            return false;
+        }
+        let dir = std::path::Path::new("plugins/Skript/logs");
+        if std::fs::create_dir_all(dir).is_err() {
+            return false;
+        }
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join(file))
+            .and_then(|mut f| writeln!(f, "{line}"))
+            .is_ok()
+    }
+
     fn player_by_name(&self, name: &str) -> Option<(u128, String)> {
         self.with(|h| {
             let p = h.players().player_by_name(name)?;
