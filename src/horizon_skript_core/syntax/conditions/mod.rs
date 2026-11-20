@@ -5,6 +5,7 @@ pub mod comparison;
 pub mod entity;
 pub mod misc;
 pub mod more;
+pub mod more2;
 pub mod player;
 
 use crate::horizon_skript_core::pattern::PatternError;
@@ -17,5 +18,6 @@ pub fn register(reg: &mut Registry) -> Result<(), PatternError> {
     entity::register(reg)?;
     misc::register(reg)?;
     more::register(reg)?;
+    more2::register(reg)?;
     Ok(())
 }
