@@ -1,7 +1,15 @@
 # hmod port: skript
-Parity: ~25% now / ~25% with our PRs (estimate: about 288 of 1168 audited items; the audit count of 146 was taken before round 3)
+Parity: ~28% now / ~28% with our PRs (about 327 of 1168 audited classes, on the audit scale of /home/leo/horizon-wt/audit/skript.md; 288 before this round, +39 classes: effects +12, conditions +12, expressions +15, events +0, types +0)
 
-Parity: ~15 % now / not measured with our PRs (about 179 of 1168 Skript classes, approximate count from the audit; the audit list is in /home/leo/horizon-wt/audit/skript.md)
+Round 6 (glue reads and core-only syntax)
+- Core: `<effect> if <condition>` (EffDoIf), `continue [the Nth loop]` (EffContinue), `assert ... [to fail] [with error ...]` (EffAssert), `log ... to file ... [with severity ...]` (EffLog, written to plugins/Skript/logs), `enable|reload|disable|unload script ...` (EffScriptFile, applied by the glue after the running trigger), `sort ... by <expr of input>` (EffSort mapping form), `transform ... using ...` (EffTransform), `input` and `input index` (ExprInput).
+- Host: `Vitals` read (abilities, experience, saturation, absorption, fire, air, freeze, velocity, on ground, invisible, sleeping, gliding, blocking, glowing, silent, invulnerable, vehicle, passengers, respawn), `WorldInfo` read (day time, game time, weather, difficulty), `biome_at`, `line_of_sight`; Actions `set_flag`, `set_fire_ticks`, `set_air`, `set_velocity`, `set_abilities`, `set_absorption`, `set_saturation`, `respawn`.
+- Expressions: fly speed, walk speed (changeable, Bukkit scale), total experience, fire time (changeable), remaining air (changeable), saturation (changeable), vehicle, passengers, bed location, biome, world time, weather, difficulty.
+- Conditions: burning, on ground, invisible, visible, frozen, blocking, sleeping, riding, gliding, glowing, silent, invulnerable, line of sight.
+- Effects: ignite, extinguish, allow/disallow flight, make fly, make invulnerable/vulnerable, silence/unsilence, force respawn.
+- Still needs an engine API (see GAPS_UPSTREAM.md): ping, fall distance, light level, spectator target, ban/whitelist/version/plugin conditions, entity validity, damage cause, lore/durability, highest block.
+- Glue or core work left although the engine API exists: velocity (needs a vector class), boss bar flags (needs a boss bar value), explosions with fire, sleep/swing actions, potion flags, leash and mob actions, `run %executable%`.
+
 Round 1
 - Fixed: src/lib.rs `has_permission` (script `permission:` nodes and `player has permission`): `PlayerRef::has_permission` replaced by a typed `permission_bool` query on a `PermissionNode` built from the node name; any error is a denial.
 - Fixed: src/lib.rs `player_commands_sent` and `player_command`: `has_permission(SKRIPT_NODE)` replaced by typed `permission_bool` on `skript_node()`.

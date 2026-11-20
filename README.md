@@ -90,6 +90,8 @@ horizon-launcher native-build <path to this folder> --server-output <dir> --vers
 
 ## Known gaps
 
+- Round 6 added entity-state reads and effects (fire, flight, speed, air, vehicle, bed, biome, world time/weather/difficulty, line of sight, invulnerable, silent, respawn) and the core effects `<effect> if <condition>`, `continue`, `assert`, `log to file`, script enable/reload/unload, `sort by`, `transform`. Still missing for lack of an engine read: ping, fall distance, light level, spectator target, ban/whitelist/version/plugin conditions, entity validity, damage cause (see GAPS_UPSTREAM.md). Missing in the port although the API exists: velocity (no vector class), boss bar flags, explosions with fire, potion effect flags, `run %executable%`.
+
 - Effects and conditions beyond the common ones (about 39 of 153 effect classes and 31 of 170 condition classes exist): no entity-flag effects or conditions (ignite, sprint, fly, glide, sleep), no `restart server`; see HMOD_PORT.md round 3 for the list.
 
 What does not work yet on arismoko/horizon (each is marked `TODO(arismoko-api: ...)` in `src/lib.rs`):
