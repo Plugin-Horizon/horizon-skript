@@ -1,4 +1,6 @@
 # hmod port: skript
+
+Parity: ~13 % now / not measured with our PRs (about 147 of 1168 Skript classes, approximate count from the audit; the audit list is in /home/leo/horizon-wt/audit/skript.md)
 Round 1
 - Fixed: src/lib.rs `has_permission` (script `permission:` nodes and `player has permission`): `PlayerRef::has_permission` replaced by a typed `permission_bool` query on a `PermissionNode` built from the node name; any error is a denial.
 - Fixed: src/lib.rs `player_commands_sent` and `player_command`: `has_permission(SKRIPT_NODE)` replaced by typed `permission_bool` on `skript_node()`.
@@ -38,3 +40,7 @@ Round 3 (expressions, events and types)
 - Added types (12 -> 61 names, 46 classes, `classes.rs`): entity, command sender, uuid, color (dye names and hex), 30 enum classes (game mode, difficulty, weather type, damage cause, teleport cause, ...), and the names byte, short, long, float, double, string, item stack, material, block, block data, offline player, living entity, projectile, vehicle, inventory holder that stand for a class the port has.
 - Gaps: no vector, quaternion, inventory, slot, block (an object), potion effect, firework effect, world border, boss bar or display types, because the value model has no variant for them; an offline player is read as an online one; the enum classes with no fixed word list take any word. Events not fired: item pickup (the hook fires every tick the item is touched), inventory click (the hook is for mod menus only), block ignite/fade/form/spread and the other level-host hooks (they cannot run scripts), and `drop` carries no item (the item handle has no readable stack). `on <event> of <type>` filters and `with priority` for the new events are not parsed.
 
+
+Round 4 (conditions, blind)
+- Added: `conditions/more2.rs`, the general `<objects> is [not] a <type>` for text, number, integer, boolean, timespan, date, world, location, item type, entity type and entity (Skript's `CondIsOfType` general form; `is a player` stays in the entity group). Registered at priority -1 in `conditions/mod.rs`. Unit test with literal values.
+- Gaps: the conditions that need an engine call the host does not offer (ban list, whitelist, server version, plugin list, join history, entity flags such as burning/on ground/invisible, damage cause, line of sight, entity validity, chunk state and slime chunks) are listed in GAPS_UPSTREAM.md. Not built or run (blind round).

@@ -90,7 +90,7 @@ horizon-launcher native-build <path to this folder> --server-output <dir> --vers
 
 ## Known gaps
 
-- Effects and conditions beyond the common ones (about 38 of 153 effect classes and 30 of 170 condition classes exist): no entity-flag effects or conditions (ignite, sprint, fly, glide, sleep), no `restart server`; see HMOD_PORT.md round 3 for the list.
+- Effects and conditions beyond the common ones (about 38 of 153 effect classes and 31 of 170 condition classes exist): no entity-flag effects or conditions (ignite, sprint, fly, glide, sleep), no `restart server`; see HMOD_PORT.md round 3 for the list.
 
 What does not work yet on arismoko/horizon (each is marked `TODO(arismoko-api: ...)` in `src/lib.rs`):
 
