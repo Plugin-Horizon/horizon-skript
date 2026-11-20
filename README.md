@@ -90,7 +90,7 @@ horizon-launcher native-build <path to this folder> --server-output <dir> --vers
 
 ## Known gaps
 
-- Round 6 added entity-state reads and effects (fire, flight, speed, air, vehicle, bed, biome, world time/weather/difficulty, line of sight, invulnerable, silent, respawn) and the core effects `<effect> if <condition>`, `continue`, `assert`, `log to file`, script enable/reload/unload, `sort by`, `transform`. Still missing for lack of an engine read: ping, fall distance, light level, spectator target, ban/whitelist/version/plugin conditions, entity validity, damage cause (see GAPS_UPSTREAM.md). Missing in the port although the API exists: velocity (no vector class), boss bar flags, explosions with fire, potion effect flags, `run %executable%`.
+- Round 6 added entity-state reads and effects (fire, flight, speed, air, vehicle, bed, biome, world time/weather/difficulty, line of sight, invulnerable, silent, respawn) and the core effects `<effect> if <condition>`, `continue`, `assert`, `log to file`, script enable/reload/unload, `sort by`, `transform`. Still missing for lack of an engine read: ping, fall distance, light level, spectator target, ban/whitelist/version/plugin conditions, entity validity, damage cause (see GAPS_UPSTREAM.md). Missing in the port although the API exists: velocity (the vector class exists since round 8, the velocity expression does not), boss bar flags, explosions with fire, potion effect flags, `run %executable%`.
 
 - Effects and conditions beyond the common ones (about 39 of 153 effect classes and 31 of 170 condition classes exist): no entity-flag effects or conditions (ignite, sprint, fly, glide, sleep), no `restart server`; see HMOD_PORT.md round 3 for the list.
 
@@ -112,9 +112,10 @@ GPL-3.0-or-later. See LICENSE and NOTICE.
 
 ## Known gaps
 
-- Most of Skript's syntax is still missing (about 330 of 1168 audited classes, see HMOD_PORT.md). Most missing
+- Most of Skript's syntax is still missing (about 346 of 1168 audited classes, see HMOD_PORT.md). Most missing
   effects, conditions and expressions need an engine call the mod API does not offer yet; they are listed under
   `skript` in the upstream gaps list.
 - Not parsed: `on <event> of <type>` filters, `ExprTernary`, `ExprFormatDate`, `ExprHash`, `/skript update|restore`.
-- Item custom names and lore, entities as values, vectors and most other types beyond the classes listed above.
+- Item custom names, lore and enchantments (no engine read), slot and inventory-slot values, potion effect values, entities as values and most other types beyond the classes listed above. Vectors exist since round 8 (random, spherical and cylindrical vectors and `x of %vector%` do not).
 - Round 7 (expressions) is written without a build; run the tests once before relying on it.
+- Round 8 (vector type, vector expressions, the player inventory read) is written without a build; run `cargo test` and check `inventory_slots` on the engine once before relying on it.

@@ -1,5 +1,23 @@
 # hmod port: skript
-Parity: ~28% now / ~28% with our PRs (about 332 of 1168 audited classes, on the audit scale of /home/leo/horizon-wt/audit/skript.md; 327 before round 7, +5 classes: expressions +5, effects +0, conditions +0, events +0, types +0)
+Parity: ~29.6% now / ~29.6% with our PRs (about 346 of 1168 audited classes, on the audit scale of /home/leo/horizon-wt/audit/skript.md; 332 before round 8, +14 classes: expressions +12, conditions +1, types +1; round 7 was 327 -> 332)
+
+Round 8 (types: vector, inventory read, blind; checklist round 100)
+- Added the `vector` type: `Value::Vector { x, y, z }` (`value.rs`); text form `x: 1, y: 2, z: 3` as Skript's VectorParser; "vector" in the class list (no text parse, as Skript's `canParse` is false); equality (`syntax/support.rs`); `is a vector` in the general type condition (`conditions/more2.rs`); arithmetic in `expr.rs` (`vector_arith`): `+ -` and `* /` between two vectors per component, `v * n`, `n * v`, `v / n`, `n / v`. Division by zero is an error (Bukkit gives infinity; a choice).
+- Added `syntax/expressions/vectors.rs`: ExprVectorFromXYZ (`vector x, y, z`), ExprXYZComponent (`x|y|z component of`), ExprVectorLength (`vector|standard|normal length of`), ExprVectorSquaredLength, ExprVectorNormalize (zero stays zero), ExprVectorDotProduct, ExprVectorCrossProduct, ExprVectorAngleBetween (degrees, as Skript), ExprVectorProjection, ExprVectorOfLocation (the position, as `Location.toVector`), ExprVectorBetweenLocations, ExprVectorFromYawAndPitch (Skript's own yaw and pitch formula), and the CondIsVectorNormalized condition (`is normalized`, tolerance 1e-6 read from Bukkit's `isNormalized` bytecode). Unit tests with literal values in the same file.
+- Core fix: `player_state` in `src/lib.rs` never read the inventory (`inventory: Vec::new()`), so `inventory of player` was always empty and `player has N of X` always failed. It now fills the stacks with items from `PlayerRef::inventory_slots` (slot order; armour, off hand and hotbar included; a stack's custom name is not read). The call shape is the one essentials uses (`cmd_items.rs`); not compiled yet.
+- Checklist round 100:
+  - [x] type vector; vector arithmetic; `is a vector`
+  - [x] expressions: ExprVectorFromXYZ, ExprXYZComponent (the `component` form only), ExprVectorLength, ExprVectorSquaredLength, ExprVectorNormalize, ExprVectorDotProduct, ExprVectorCrossProduct, ExprVectorAngleBetween, ExprVectorProjection, ExprVectorOfLocation, ExprVectorBetweenLocations, ExprVectorFromYawAndPitch
+  - [x] conditions: CondIsVectorNormalized
+  - [x] inventory of player and player has (the inventory read)
+  - [ ] ExprVectorRandom (Skript samples uniformly in the cube with rejection; not ported), ExprVectorFromDirection (needs location directions), ExprVectorSpherical and ExprVectorCylindrical
+  - [ ] bare `x of %vector%`, `%vector%'s x` and the setters (`set x of`, `add ... to x of`): the location coordinate owns `x of` and changing a vector needs effects
+  - [ ] slot type and `slot n of player`, `first empty slot`, `inventory slot`: the engine reads the slot index (`inventory_slots`), PlayerState keeps only the stacks; add a slot index field to PlayerState first
+  - [ ] potion effect and potion effect type values, `potion effects of`, `has potion`, apply and remove: the engine reads exist (`living_effects`, `living_add_effect`, `living_remove_all_effects`); the port side is not written
+  - [ ] entity type values beyond the existing ones: ExprNearestEntity, ExprEntityType (`entity type of`), is alive: `entities_in_world` exists in the host; the distance code is not written
+  - [ ] item stack lore, enchantments and custom name: no engine read (GAPS_UPSTREAM.md, two new lines under `skript`)
+  - [ ] the vector-valued variables: a vector is not written to variables.csv (vars.rs `encode` has no vector, the same as locations)
+- Unsure: all of round 8 is written blind, not built or run. Choices: division by zero is an error for vectors; `normalized` of a zero vector is zero (Skript skips it, the same result); the vector of a location is the position (Skript's `toVector`), not a direction; the inventory read keeps only non-empty stacks and relies on `inventory_slots` returning every slot, which the glue has not checked against the engine yet.
 
 Round 7 (expressions, blind; checklist round 100)
 - Added: `syntax/expressions/more3.rs`: `<n>% of %numbers%` (literal percent), `%number% percent of %numbers%`, `inverse|opposite of %booleans%`, `midpoint of %location% and %location%` (same world only, yaw and pitch zero), `shuffled %objects%` (Fisher-Yates on the host's random number), `%objects% except|excluding %objects%` (the `equal` rules of the comparison code). Unit tests with literal values in the same file.
