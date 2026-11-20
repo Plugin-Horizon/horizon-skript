@@ -184,9 +184,71 @@ fn float(n: N) -> f64 {
     }
 }
 
+/// One component of a vector operation. Division by zero is an error (Bukkit would give infinity).
+fn vector_component(op: Op, p: f64, q: f64) -> Result<f64, RunError> {
+    match op {
+        Op::Add => Ok(p + q),
+        Op::Sub => Ok(p - q),
+        Op::Mul => Ok(p * q),
+        _ if q == 0.0 => Err(RunError::new("division by zero")),
+        _ => Ok(p / q),
+    }
+}
+
+/// Three component results as a vector value, or the first error.
+fn vector_of(parts: [Result<f64, RunError>; 3]) -> Result<Value, RunError> {
+    let [x, y, z] = parts;
+    Ok(Value::Vector {
+        x: x?,
+        y: y?,
+        z: z?,
+    })
+}
+
+/// Vector arithmetic, as Skript's operations on Bukkit's `Vector`: `+` and `-` between two
+/// vectors, `*` and `/` between two vectors per component, `v * n`, `n * v`, `v / n` and `n / v`
+/// with a number (`n / v` divides the number by each component). `None` for other operand pairs,
+/// which then fall through to the number rules and their error.
+fn vector_arith(op: Op, a: &Value, b: &Value) -> Option<Result<Value, RunError>> {
+    if op == Op::Pow {
+        return None;
+    }
+    let number = |v: &Value| match v {
+        Value::Int(_) | Value::Num(_) => v.as_f64(),
+        _ => None,
+    };
+    match (a, b) {
+        (Value::Vector { x, y, z }, Value::Vector { x: u, y: v, z: w }) => Some(vector_of([
+            vector_component(op, *x, *u),
+            vector_component(op, *y, *v),
+            vector_component(op, *z, *w),
+        ])),
+        (Value::Vector { x, y, z }, _) if op == Op::Mul || op == Op::Div => {
+            let k = number(b)?;
+            Some(vector_of([
+                vector_component(op, *x, k),
+                vector_component(op, *y, k),
+                vector_component(op, *z, k),
+            ]))
+        }
+        (_, Value::Vector { x, y, z }) if op == Op::Mul || op == Op::Div => {
+            let k = number(a)?;
+            Some(vector_of([
+                vector_component(op, k, *x),
+                vector_component(op, k, *y),
+                vector_component(op, k, *z),
+            ]))
+        }
+        _ => None,
+    }
+}
+
 /// `+ - * / ^` on two values. Timespans add and subtract; text joins with `+` when the
 /// operands are not both numbers.
 pub fn arith(op: Op, a: &Value, b: &Value) -> Result<Value, RunError> {
+    if let Some(result) = vector_arith(op, a, b) {
+        return result;
+    }
     if let (Value::Timespan(x), Value::Timespan(y)) = (a, b) {
         match op {
             Op::Add => return Ok(Value::Timespan(x + y)),

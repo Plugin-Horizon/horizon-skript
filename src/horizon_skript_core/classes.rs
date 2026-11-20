@@ -18,6 +18,7 @@ pub const CLASS_NAMES: &[&str] = &[
     "location",
     "item type",
     "entity type",
+    "vector",
 ];
 
 /// Classes beyond the core ones: entities, command senders, UUIDs, colours.

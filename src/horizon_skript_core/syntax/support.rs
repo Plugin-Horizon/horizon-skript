@@ -194,6 +194,9 @@ pub fn equal(a: &Value, b: &Value) -> bool {
             },
         ) => x == y && (yn.is_none() || xn == yn),
         (EntityType(x), EntityType(y)) => x == y,
+        (Vector { x: a1, y: b1, z: c1 }, Vector { x: a2, y: b2, z: c2 }) => {
+            a1 == a2 && b1 == b2 && c1 == c2
+        }
         _ => false,
     }
 }

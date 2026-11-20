@@ -2,10 +2,10 @@
 //! location`, `{_list::*} are texts`. Ported from the general form of Skript's `CondIsOfType`
 //! (the entity group keeps `is a player`).
 //!
-//! Differences from Skript: only the core classes and `entity` are checked (text, number,
-//! integer, boolean, timespan, date, world, location, item type, entity type, entity). A value the
-//! port keeps as text (an enum word, a UUID, a colour list) is not a number or a location, and
-//! `is an object` is not registered.
+//! Differences from Skript: only the core classes, `entity` and `vector` are checked (text,
+//! number, integer, boolean, timespan, date, world, location, item type, entity type, entity,
+//! vector). A value the port keeps as text (an enum word, a UUID, a colour list) is not a number
+//! or a location, and `is an object` is not registered.
 
 use crate::horizon_skript_core::error::RunError;
 use crate::horizon_skript_core::pattern::PatternError;
@@ -28,6 +28,7 @@ fn is_class(v: &Value, class: &str) -> bool {
         "item type" => matches!(v, Value::ItemType { .. }),
         "entity type" => matches!(v, Value::EntityType(_)),
         "entity" => matches!(v, Value::Player { .. } | Value::EntityType(_)),
+        "vector" => matches!(v, Value::Vector { .. }),
         _ => false,
     }
 }
@@ -46,7 +47,7 @@ pub fn register(reg: &mut Registry) -> Result<(), PatternError> {
     // entity group (`is a player`), so it is not in the list.
     reg.add_condition(
         "is of class",
-        &["%objects% (is|are)(1¦ not|1¦n't|) [a[n]] <(?i)entity type|item type|entity|text|number|integer|boolean|timespan|date|world|location>"],
+        &["%objects% (is|are)(1¦ not|1¦n't|) [a[n]] <(?i)entity type|item type|entity|text|number|integer|boolean|timespan|date|world|location|vector>"],
         -1,
         of_class,
     )?;

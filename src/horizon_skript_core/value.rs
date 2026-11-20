@@ -33,6 +33,8 @@ pub enum Value {
     },
     /// Namespaced entity id (`minecraft:zombie`).
     EntityType(String),
+    /// A vector (`vector 1, 2, 3`): three decimals, as Bukkit's `Vector`.
+    Vector { x: f64, y: f64, z: f64 },
     List(Vec<Value>),
 }
 
@@ -62,6 +64,7 @@ impl Value {
             Value::Location(_) => "location",
             Value::ItemType { .. } => "item type",
             Value::EntityType(_) => "entity type",
+            Value::Vector { .. } => "vector",
         }
     }
 
@@ -127,6 +130,13 @@ impl Value {
                 }
             }
             Value::EntityType(id) => classes::short_id(id).replace('_', " "),
+            // Skript's VectorParser: `x: 1, y: 2, z: 3`.
+            Value::Vector { x, y, z } => format!(
+                "x: {}, y: {}, z: {}",
+                format_number(*x),
+                format_number(*y),
+                format_number(*z)
+            ),
             Value::List(items) => items
                 .iter()
                 .map(Value::to_text)
