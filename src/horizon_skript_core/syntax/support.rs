@@ -109,6 +109,15 @@ pub fn colour_of(v: &Value) -> Option<[u8; 3]> {
     }
 }
 
+/// The number of a slot: a whole number from 0 up to `max` (the engine's last slot is 42).
+pub fn slot_index(v: &Value, max: u32) -> Result<u32, RunError> {
+    let n = number_of(v)?;
+    if n.fract() != 0.0 || n < 0.0 || n > f64::from(max) {
+        return Err(RunError::new(format!("there is no slot {}", v.to_text())));
+    }
+    Ok(n as u32)
+}
+
 /// The state of the player in slot `n`.
 pub fn state_at(cx: &mut Ctx<'_>, m: &Matched, n: usize) -> Result<(u128, PlayerState), RunError> {
     let v = slot(cx, m, n)?;
@@ -194,6 +203,7 @@ pub fn equal(a: &Value, b: &Value) -> bool {
             },
         ) => x == y && (yn.is_none() || xn == yn),
         (EntityType(x), EntityType(y)) => x == y,
+        (Slot { owner: x, index: i }, Slot { owner: y, index: j }) => x == y && i == j,
         (Vector { x: a1, y: b1, z: c1 }, Vector { x: a2, y: b2, z: c2 }) => {
             a1 == a2 && b1 == b2 && c1 == c2
         }
@@ -352,6 +362,8 @@ mod tests {
                     name: None,
                 },
             ],
+            inventory_slots: vec![0, 3],
+            selected_slot: 0,
         };
         assert_eq!(count_in(&state, "minecraft:flint"), 7);
         assert_eq!(count_in(&state, "minecraft:stone"), 0);

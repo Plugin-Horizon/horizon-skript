@@ -315,6 +315,8 @@ impl SkHost for Bridge<'_> {
                 op: false,
                 held,
                 inventory: Vec::new(),
+                inventory_slots: Vec::new(),
+                selected_slot: 0,
             })
         })
     }
@@ -343,18 +345,24 @@ impl SkHost for Bridge<'_> {
             };
             let abilities = p.abilities(&*h);
             let held = held_item(h, living);
-            // The stacks with items in them (armour, off hand and hotbar included), in slot order.
-            let inventory = p
+            // The stacks with items in them (armour, off hand and hotbar included), in slot order,
+            // with the slot number the engine gives each one.
+            let filled: Vec<(u32, ItemStack)> = p
                 .inventory_slots(&*h)
                 .unwrap_or_default()
                 .into_iter()
                 .filter(|(_, stack)| stack.count() > 0)
+                .collect();
+            let inventory_slots: Vec<u32> = filled.iter().map(|(n, _)| *n).collect();
+            let inventory: Vec<SkItemStack> = filled
+                .iter()
                 .map(|(_, stack)| SkItemStack {
                     id: item_id(&*h, stack.item()),
                     amount: i64::from(stack.count()),
                     name: None,
                 })
                 .collect();
+            let selected_slot = p.selected_slot(&*h).unwrap_or(0) as u32;
             Some(PlayerState {
                 display_name: name.clone(),
                 name,
@@ -379,6 +387,8 @@ impl SkHost for Bridge<'_> {
                 op: p.permission_level(&*h).is_some_and(|l| l >= 1),
                 held,
                 inventory,
+                inventory_slots,
+                selected_slot,
             })
         })
     }
@@ -824,6 +834,30 @@ impl Actions for Bridge<'_> {
             return false;
         };
         self.with(|h| run_console_line(h, &format!("give {name} {id} {amount}")))
+    }
+
+    // The engine's inventory write by slot number, for online players (`Inventory.setItem`). The
+    // stack is made from its id and amount: a custom name is not written.
+    fn set_inventory_slot(&self, uuid: u128, slot: u32, stack: Option<&SkItemStack>) -> bool {
+        self.with(|h| {
+            let made = match stack {
+                Some(s) => {
+                    let Some(key) = Identifier::parse(&s.id).ok().and_then(|id| h.item_key(&id)) else {
+                        return false;
+                    };
+                    let count = u32::try_from(s.amount).ok().filter(|n| *n > 0).unwrap_or(1);
+                    let Some(made) = ItemStack::new(key, count) else {
+                        return false;
+                    };
+                    Some(made)
+                }
+                None => None,
+            };
+            let Some(p) = h.player(uuid) else {
+                return false;
+            };
+            p.set_inventory_slot(h, slot, made).is_ok()
+        })
     }
 
     // The vanilla `item replace entity` command, for online players. The item's custom name is a

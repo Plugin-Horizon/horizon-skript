@@ -35,6 +35,9 @@ pub enum Value {
     EntityType(String),
     /// A vector (`vector 1, 2, 3`): three decimals, as Bukkit's `Vector`.
     Vector { x: f64, y: f64, z: f64 },
+    /// An inventory slot of a player: the engine's slot number (0 to 42, see
+    /// `PlayerState::inventory_slots`) and the player's uuid.
+    Slot { owner: u128, index: u32 },
     List(Vec<Value>),
 }
 
@@ -65,6 +68,7 @@ impl Value {
             Value::ItemType { .. } => "item type",
             Value::EntityType(_) => "entity type",
             Value::Vector { .. } => "vector",
+            Value::Slot { .. } => "slot",
         }
     }
 
@@ -137,6 +141,7 @@ impl Value {
                 format_number(*y),
                 format_number(*z)
             ),
+            Value::Slot { index, .. } => format!("slot {index}"),
             Value::List(items) => items
                 .iter()
                 .map(Value::to_text)

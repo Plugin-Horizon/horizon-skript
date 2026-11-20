@@ -295,6 +295,8 @@ mod radius_tests {
             op: false,
             held: "minecraft:air".into(),
             inventory: vec![],
+            inventory_slots: vec![],
+            selected_slot: 0,
         }
     }
 

@@ -38,6 +38,12 @@ pub struct PlayerState {
     pub held: String,
     /// The filled slots of the inventory, in slot order.
     pub inventory: Vec<ItemStack>,
+    /// The slot number of each stack in `inventory`, in the same order: 0 to 35 the main inventory
+    /// (0 to 8 the hotbar), 36 to 39 the armour from feet to head, 40 the off hand, 41 the body and
+    /// 42 the saddle, as the engine numbers them.
+    pub inventory_slots: Vec<u32>,
+    /// The hotbar slot the player holds, 0 to 8 (Skript's `tool`).
+    pub selected_slot: u32,
 }
 
 /// One entity of a world, as the scripts see it. Player-type entities (`kind` `minecraft:player`)
@@ -370,6 +376,11 @@ pub trait Actions {
     }
     /// Sets where a player respawns.
     fn set_respawn(&self, _uuid: u128, _at: &Location) -> bool {
+        false
+    }
+    /// Puts a stack (`Some`) or nothing (`None`) into a numbered inventory slot of a player (the
+    /// numbers of [`PlayerState::inventory_slots`]). False when the engine refuses it.
+    fn set_inventory_slot(&self, _uuid: u128, _slot: u32, _stack: Option<&ItemStack>) -> bool {
         false
     }
 }
@@ -708,6 +719,16 @@ impl Actions for Recorder {
             "respawn {uuid} {}",
             crate::horizon_skript_core::value::Value::Location(at.clone()).to_text()
         ));
+        true
+    }
+    fn set_inventory_slot(&self, uuid: u128, slot: u32, stack: Option<&ItemStack>) -> bool {
+        let what = match stack {
+            Some(s) => format!("{} {}", s.id, s.amount),
+            None => "clear".to_owned(),
+        };
+        self.acted
+            .borrow_mut()
+            .push(format!("slot {uuid} {slot} {what}"));
         true
     }
 }

@@ -42,6 +42,7 @@ pub fn register(reg: &mut Registry) -> Result<(), PatternError> {
     variables::register(reg)?;
     sorting::register(reg)?;
     vitals::register(reg)?;
+    slots::register(reg)?;
     Ok(())
 }
 
@@ -207,6 +208,8 @@ pub(super) mod fixtures {
             op: false,
             held: "minecraft:air".into(),
             inventory: Vec::new(),
+            inventory_slots: Vec::new(),
+            selected_slot: 0,
         }
     }
 }

@@ -29,6 +29,7 @@ fn is_class(v: &Value, class: &str) -> bool {
         "entity type" => matches!(v, Value::EntityType(_)),
         "entity" => matches!(v, Value::Player { .. } | Value::EntityType(_)),
         "vector" => matches!(v, Value::Vector { .. }),
+        "slot" => matches!(v, Value::Slot { .. }),
         _ => false,
     }
 }

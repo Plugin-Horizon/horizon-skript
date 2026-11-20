@@ -215,6 +215,8 @@ mod tests {
                 op: false,
                 held: "minecraft:air".into(),
                 inventory: vec![],
+                inventory_slots: Vec::new(),
+                selected_slot: 0,
             },
         )];
         h.equipment = vec![(
