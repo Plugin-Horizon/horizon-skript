@@ -18,6 +18,7 @@ mod players;
 mod server;
 pub(crate) mod sorting;
 mod variables;
+mod vitals;
 mod world;
 
 use crate::horizon_skript_core::error::RunError;
@@ -40,6 +41,7 @@ pub fn register(reg: &mut Registry) -> Result<(), PatternError> {
     server::register(reg)?;
     variables::register(reg)?;
     sorting::register(reg)?;
+    vitals::register(reg)?;
     Ok(())
 }
 

@@ -40,7 +40,7 @@ fn property(
     check: fn(&Vitals) -> bool,
 ) -> Result<(), PatternError> {
     let pattern = format!("%players% (is|are)(1¦ not|1¦n't|) {words}");
-    reg.add_condition(name, &[pattern.as_str()], 0, Property(check))
+    reg.add_condition(name, &[pattern.as_str()], -1, Property(check))
 }
 
 pub fn register(reg: &mut Registry) -> Result<(), PatternError> {
@@ -67,7 +67,7 @@ pub fn register(reg: &mut Registry) -> Result<(), PatternError> {
             "%players% (has|have) [a] [direct] line of sight to %player%",
             "%players% (1¦does(n't| not) have|1¦(has|have) no) [a] [direct] line of sight to %player%",
         ],
-        0,
+        -1,
         line_of_sight,
     )?;
     Ok(())
