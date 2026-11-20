@@ -1,5 +1,22 @@
 # hmod port: skript
-Parity: ~28% now / ~28% with our PRs (about 327 of 1168 audited classes, on the audit scale of /home/leo/horizon-wt/audit/skript.md; 288 before this round, +39 classes: effects +12, conditions +12, expressions +15, events +0, types +0)
+Parity: ~28% now / ~28% with our PRs (about 332 of 1168 audited classes, on the audit scale of /home/leo/horizon-wt/audit/skript.md; 327 before round 7, +5 classes: expressions +5, effects +0, conditions +0, events +0, types +0)
+
+Round 7 (expressions, blind; checklist round 100)
+- Added: `syntax/expressions/more3.rs`: `<n>% of %numbers%` (literal percent), `%number% percent of %numbers%`, `inverse|opposite of %booleans%`, `midpoint of %location% and %location%` (same world only, yaw and pitch zero), `shuffled %objects%` (Fisher-Yates on the host's random number), `%objects% except|excluding %objects%` (the `equal` rules of the comparison code). Unit tests with literal values in the same file.
+- Checklist round 100 (ticks = done this round or earlier; `[ ]` = still to do; the audit count is the original syntax class name):
+  - [x] expressions: ExprPercent, ExprInverse, ExprMidpoint, ExprShuffledList, ExprExcept (round 7); ExprRound, ExprNumbers, ExprSortedList, ExprReversedList, ExprRepeat, ExprAlphabetList, ExprCodepoint, ExprDateAgoLater, ExprTimeSince, ExprRandomUUID (earlier rounds)
+  - [x] structures: `variables:`, `aliases:`, `using`, `local function`, `on <event> with priority` (round 2); `/skript` help, reload and enable/disable forms, Tab completion (round 2)
+  - [x] command header, console execution, `executable by`, `cooldown`, `permission` (round 2)
+  - [ ] `/skript update|restore` (no updater in the host)
+  - [ ] `on <event> of <type>` filters and `with priority` on the new events (core work, parse.rs)
+  - [ ] `suppress warnings` and `suppress type hints` sections (no-op in the port; section parsing)
+  - [ ] `ExprTimespanDetails` (`%timespan%'s days` ...): needs the TimePeriod constants checked against the original before writing
+  - [ ] `ExprFormatDate`, `ExprHash` (MD5/SHA family: no digest crate in Cargo.toml)
+  - [ ] `ExprTernary` (`%objects% if <condition> otherwise %objects%`): needs a condition sub-parse, not a pattern
+  - [ ] the other pure syntax classes of the audit (most effects and conditions are on engine APIs, see the list below)
+  - [ ] API-blocked (one line each in GAPS_UPSTREAM.md under `skript`, already present): ping, fall distance, spectator target, lore and durability, light level, solid blocks, living entities as values, living states, entity flags, detonation, mob AI, potion flags, block changes, event cancels, item meta, visibility, world and server calls, transfer, the level-host event hooks, ban list, whitelist, server version, plugin list, damage cause, entity validity, chunk state
+- Unsure: all of round 7 is written blind, not built or run. The percent literal form relies on the pattern escape `\%` as the chance condition does.
+
 
 Round 6 (glue reads and core-only syntax)
 - Core: `<effect> if <condition>` (EffDoIf), `continue [the Nth loop]` (EffContinue), `assert ... [to fail] [with error ...]` (EffAssert), `log ... to file ... [with severity ...]` (EffLog, written to plugins/Skript/logs), `enable|reload|disable|unload script ...` (EffScriptFile, applied by the glue after the running trigger), `sort ... by <expr of input>` (EffSort mapping form), `transform ... using ...` (EffTransform), `input` and `input index` (ExprInput).

@@ -109,3 +109,12 @@ What does not work yet on arismoko/horizon (each is marked `TODO(arismoko-api: .
 ## Licence
 
 GPL-3.0-or-later. See LICENSE and NOTICE.
+
+## Known gaps
+
+- Most of Skript's syntax is still missing (about 330 of 1168 audited classes, see HMOD_PORT.md). Most missing
+  effects, conditions and expressions need an engine call the mod API does not offer yet; they are listed under
+  `skript` in the upstream gaps list.
+- Not parsed: `on <event> of <type>` filters, `ExprTernary`, `ExprFormatDate`, `ExprHash`, `/skript update|restore`.
+- Item custom names and lore, entities as values, vectors and most other types beyond the classes listed above.
+- Round 7 (expressions) is written without a build; run the tests once before relying on it.
