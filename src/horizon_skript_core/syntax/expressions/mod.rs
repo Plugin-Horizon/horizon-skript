@@ -10,6 +10,7 @@ pub mod more2;
 pub mod more3;
 pub mod player;
 pub mod text;
+pub mod vectors;
 pub mod vitals;
 pub mod world;
 
@@ -29,5 +30,6 @@ pub fn register(reg: &mut Registry) -> Result<(), PatternError> {
     more2::register(reg)?;
     more3::register(reg)?;
     vitals::register(reg)?;
+    vectors::register(reg)?;
     Ok(())
 }
