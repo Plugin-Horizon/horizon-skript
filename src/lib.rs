@@ -320,8 +320,8 @@ impl SkHost for Bridge<'_> {
     }
 
     // An online player's state from the player's handle: position, world, rotation, health, food,
-    // experience, game mode, flight, sneaking, sprinting, op (permission level 1+). Inventory is
-    // not read here.
+    // experience, game mode, flight, sneaking, sprinting, op (permission level 1+) and the filled
+    // inventory stacks (`inventory of player`, `player has ...`; a stack's custom name is not read).
     fn player_state(&self, uuid: u128) -> Option<PlayerState> {
         self.with(|h| {
             let p = h.player(uuid)?;
@@ -343,6 +343,18 @@ impl SkHost for Bridge<'_> {
             };
             let abilities = p.abilities(&*h);
             let held = held_item(h, living);
+            // The stacks with items in them (armour, off hand and hotbar included), in slot order.
+            let inventory = p
+                .inventory_slots(&*h)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|(_, stack)| stack.count() > 0)
+                .map(|(_, stack)| SkItemStack {
+                    id: item_id(&*h, stack.item()),
+                    amount: i64::from(stack.count()),
+                    name: None,
+                })
+                .collect();
             Some(PlayerState {
                 display_name: name.clone(),
                 name,
@@ -366,7 +378,7 @@ impl SkHost for Bridge<'_> {
                 swimming: e.pose(&*h) == Some("swimming"),
                 op: p.permission_level(&*h).is_some_and(|l| l >= 1),
                 held,
-                inventory: Vec::new(),
+                inventory,
             })
         })
     }
