@@ -6,6 +6,7 @@ pub mod event;
 pub mod lists;
 pub mod location;
 pub mod misc;
+pub mod more2;
 pub mod player;
 pub mod text;
 pub mod world;
@@ -23,5 +24,6 @@ pub fn register(reg: &mut Registry) -> Result<(), PatternError> {
     event::register(reg)?;
     lists::register(reg)?;
     world::register(reg)?;
+    more2::register(reg)?;
     Ok(())
 }
