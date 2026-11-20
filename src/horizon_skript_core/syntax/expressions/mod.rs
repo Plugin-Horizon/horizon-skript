@@ -7,6 +7,7 @@ pub mod lists;
 pub mod location;
 pub mod misc;
 pub mod more2;
+pub mod more3;
 pub mod player;
 pub mod text;
 pub mod vitals;
@@ -26,6 +27,7 @@ pub fn register(reg: &mut Registry) -> Result<(), PatternError> {
     lists::register(reg)?;
     world::register(reg)?;
     more2::register(reg)?;
+    more3::register(reg)?;
     vitals::register(reg)?;
     Ok(())
 }
