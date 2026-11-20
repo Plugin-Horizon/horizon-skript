@@ -278,7 +278,9 @@ impl Parser {
                         .ok_or_else(|| "missing closing '>' of a regex".to_owned())?;
                     let body: String = self.chars[self.pos..self.pos + end].iter().collect();
                     self.pos += end + 1;
-                    let re = Regex::new(&format!("^(?:{body})"))
+                    // Anchored at both ends: the matcher tries every end of the text (see `run`), and
+                    // a leftmost-first regex alone would stop at a shorter alternative (`bad` of `bad luck`).
+                    let re = Regex::new(&format!("^(?:{body})$"))
                         .map_err(|e| format!("invalid regex '{body}': {e}"))?;
                     cur.push(Raw::Regex(re));
                 }
@@ -428,12 +430,25 @@ fn run<T: Clone>(
             run(rest, pos, input, st, parse)
         }
         Flat::Regex(re) => {
-            let caps = re.captures(input.get(pos..)?)?;
-            let whole = caps.get(0)?;
-            let group = caps.get(1).unwrap_or(whole).as_str().to_owned();
-            let end = pos + whole.end();
-            st.regex.push(group);
-            run(rest, end, input, st, parse)
+            // Longest text first, as the slots do; the first end the rest of the pattern accepts wins.
+            let mut ends: Vec<usize> = input[pos..]
+                .char_indices()
+                .map(|(i, c)| pos + i + c.len_utf8())
+                .collect();
+            ends.reverse();
+            ends.push(pos);
+            for end in ends {
+                let Some(caps) = re.captures(&input[pos..end]) else {
+                    continue;
+                };
+                let group = caps.get(1).or(caps.get(0))?.as_str().to_owned();
+                let mut next = st.clone();
+                next.regex.push(group);
+                if let Some(done) = run(rest, end, input, next, parse) {
+                    return Some(done);
+                }
+            }
+            None
         }
         Flat::Slot(spec) => {
             // Longest text first; a slot never starts or ends with a space.

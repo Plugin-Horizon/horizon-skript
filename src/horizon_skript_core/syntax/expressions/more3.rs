@@ -171,14 +171,14 @@ mod tests {
         assert_eq!(
             expr(
                 &fresh(),
-                "x of midpoint of location at 0, 0, 0 and location at 2, 4, 6"
+                "x of midpoint of location at 0, 0, 0 in world \"w\" and location at 2, 4, 6 in world \"w\""
             ),
             "1"
         );
         assert_eq!(
             expr(
                 &fresh(),
-                "z of midpoint of location at 0, 0, 0 and location at 2, 4, 6"
+                "z of midpoint of location at 0, 0, 0 in world \"w\" and location at 2, 4, 6 in world \"w\""
             ),
             "3"
         );

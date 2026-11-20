@@ -9,7 +9,7 @@ use crate::horizon_skript_core::registry::Registry;
 
 pub(super) fn register(reg: &mut Registry) -> Result<(), PatternError> {
     reg.add_event("pick item", &["[player] pick[ ]item"])?;
-    reg.add_event("stop using item", &["[player] stop(ped|ping) using [an] item"])?;
+    reg.add_event("stop using item", &["[player] stop[(ped|ping)] using [an] item"])?;
     reg.add_event("ready arrow", &["[player] (ready|readying) [an] arrow"])?;
     reg.add_event("deep sleep", &["[player] deep sleep[ing]"])?;
     reg.add_event("egg throw", &["[player] egg throw[ing]"])?;

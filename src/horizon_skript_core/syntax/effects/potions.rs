@@ -66,7 +66,8 @@ pub(super) fn register(reg: &mut Registry) -> Result<(), PatternError> {
     );
     let remove_pattern = format!("remove <({})> [potion] from %players%", names.join("|"));
     reg.add_effect("apply potion", &[apply_pattern.as_str()], -1, apply)?;
-    reg.add_effect("remove potion", &[remove_pattern.as_str()], -1, remove)?;
+    // Before `remove` of items (priority -1, registered earlier): `remove bad luck from Alice` is a potion.
+    reg.add_effect("remove potion", &[remove_pattern.as_str()], -2, remove)?;
     Ok(())
 }
 

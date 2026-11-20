@@ -22,7 +22,7 @@ use mod_api::{
     Command, CommandArgumentValue, CommandSource, Config, ConfigKind, ConfigLoadingEvent,
     ConfigReloadingEvent, EntityRef, EquipmentSlot, Flow, GameMode, Hand, Hooks, HostSide,
     Identifier, InteractionResult, ItemKey, ItemStack, LevelRandomHost, LivingDamagePreEvent, ParticleOptions,
-    PlayerCommandsSentEvent, PlayerLoggedInEvent, PlayerLoggedOutEvent, PlayerRef, RegisterCommandsEvent,
+    PlayerCommandsSentEvent, PlayerLoggedInEvent, PlayerLoggedOutEvent, PlayerRef, RegisterCommandsEvent, RegisterNodeCommandsEvent,
     RunModCommandEvent, ServerAboutToStartEvent, ServerChatEvent, ServerHost, ServerStoppingEvent,
     ServerTickEvent, ServerTickPhase, StatType, Suggestion, TabCompleteEvent, Text, ParticleKey, Registrar, RegistrationContext,
     NodeDefault, PermissionError, PermissionGatherNodesEvent, PermissionLevel, PermissionNode,
@@ -508,10 +508,7 @@ impl SkHost for Bridge<'_> {
                 effects
                     .into_iter()
                     .map(|a| PotionInfo {
-                        id: h
-                            .effect_key_id(a.id)
-                            .trim_start_matches("minecraft:")
-                            .to_owned(),
+                        id: a.id.id(&*h).trim_start_matches("minecraft:").to_owned(),
                         amplifier: a.amplifier,
                         duration_ticks: a.duration,
                     })
@@ -1372,11 +1369,6 @@ impl Hooks for Skript {
     }
 
     fn register_commands(&self, host: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {
-        // plugin.yml: `skript`, alias `sk`, permission skript.admin (default op). The node decides when a
-        // permissions mod answers; the level 2 only without one. `player_command` gives the Bukkit line.
-        for usage in ["skript", "skript <args:text>", "sk", "sk <args:text>"] {
-            event.commands.push(Command::op(usage, 2).with_node(&skript_node()));
-        }
         // The scripts' `command /name:` triggers and their aliases (loads the scripts on the first call).
         let infos = self.with_manager(host, |_, m, _| m.command_infos());
         let mut seen = std::collections::HashSet::new();
@@ -1386,10 +1378,16 @@ impl Hooks for Skript {
                     continue;
                 }
                 event.commands.push(Command::new(&label));
-                event
-                    .commands
-                    .push(Command::new(&format!("{label} <args:text>")));
+                event.commands.push(Command::new(&format!("{label} <args:text>")));
             }
+        }
+    }
+
+    fn register_node_commands(&self, _host: &mut dyn ServerHost, event: &mut RegisterNodeCommandsEvent<'_>) {
+        // plugin.yml: `skript`, alias `sk`, permission skript.admin (default op). The node decides when a
+        // permissions mod answers; the level 2 only without one. `player_command` gives the Bukkit line.
+        for usage in ["skript", "skript <args:text>", "sk", "sk <args:text>"] {
+            event.commands.push(Command::op(usage, 2).with_node(&skript_node()));
         }
     }
 

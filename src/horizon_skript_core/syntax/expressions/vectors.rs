@@ -547,11 +547,11 @@ mod tests {
     #[test]
     fn vector_of_locations() {
         assert_eq!(
-            expr(&fresh(), "vector of location at 1, 2, 3"),
+            expr(&fresh(), "vector of location at 1, 2, 3 in world \"w\""),
             "x: 1, y: 2, z: 3"
         );
         assert_eq!(
-            expr(&fresh(), "vector from location at 1, 2, 3 to location at 4, 6, 3"),
+            expr(&fresh(), "vector from location at 1, 2, 3 in world \"w\" to location at 4, 6, 3 in world \"w\""),
             "x: 3, y: 4, z: 0"
         );
     }

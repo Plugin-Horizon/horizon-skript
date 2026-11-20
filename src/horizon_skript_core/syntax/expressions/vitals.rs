@@ -374,7 +374,8 @@ mod tests {
     fn vehicle_passengers_and_bed() {
         let h = host();
         assert_eq!(expr(&h, "vehicle of Alice"), "Bob");
-        assert_eq!(expr(&h, "passengers of Alice"), "Bob");
+        // A list does not print through `%{r}%`; its first element does.
+        assert_eq!(expr(&h, "the first element of passengers of Alice"), "Bob");
         assert!(expr(&h, "bed location of Alice").contains("64"));
     }
 

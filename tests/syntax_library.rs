@@ -47,6 +47,8 @@ fn alice() -> PlayerState {
                 name: None,
             },
         ],
+        inventory_slots: vec![0, 3],
+        selected_slot: 0,
     }
 }
 
@@ -75,6 +77,8 @@ fn bob() -> PlayerState {
         op: false,
         held: "minecraft:air".into(),
         inventory: vec![],
+        inventory_slots: vec![],
+        selected_slot: 0,
     }
 }
 

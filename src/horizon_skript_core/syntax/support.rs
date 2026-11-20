@@ -266,6 +266,8 @@ pub(crate) mod testing {
 
     /// The value of an expression, as its text (the script stores it in `{r}` and broadcasts it).
     pub fn expr(host: &Recorder, e: &str) -> String {
+        // Only this expression's broadcast counts: the host may have answered earlier ones.
+        host.broadcasts.borrow_mut().clear();
         let logs = run(
             host,
             &format!("\tset {{r}} to {e}\n\tbroadcast \"%{{r}}%\"\n"),
