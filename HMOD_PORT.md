@@ -1,4 +1,5 @@
 # hmod port: skript
+Parity: ~25% now / ~25% with our PRs (estimate: about 288 of 1168 audited items; the audit count of 146 was taken before round 3)
 
 Parity: ~13 % now / not measured with our PRs (about 147 of 1168 Skript classes, approximate count from the audit; the audit list is in /home/leo/horizon-wt/audit/skript.md)
 Round 1
@@ -44,3 +45,8 @@ Round 3 (expressions, events and types)
 Round 4 (conditions, blind)
 - Added: `conditions/more2.rs`, the general `<objects> is [not] a <type>` for text, number, integer, boolean, timespan, date, world, location, item type, entity type and entity (Skript's `CondIsOfType` general form; `is a player` stays in the entity group). Registered at priority -1 in `conditions/mod.rs`. Unit test with literal values.
 - Gaps: the conditions that need an engine call the host does not offer (ban list, whitelist, server version, plugin list, join history, entity flags such as burning/on ground/invisible, damage cause, line of sight, entity validity, chunk state and slime chunks) are listed in GAPS_UPSTREAM.md. Not built or run (blind round).
+
+Round 4 (expressions, blind)
+- Added expressions (`expressions/more2.rs`, 2 new classes plus 4 forms of existing ones): `round`, `round down|floored`, `round up|ceiled` on numbers and lists (half up, as Java `Math.round`, integer result); `%numbers% in degrees|radians` (a radian value is turned into degrees, as `ExprAngle`); `first|last [N] character(s) of %text%`; `name of %world%`.
+- Gaps (need an engine API, listed in `/home/leo/horizon-wt/audit/GAPS_UPSTREAM.md` under skript): ping, fly and walk speed, total experience, fall distance, fire ticks, air, saturation, absorption, velocity, respawn and bed location, vehicle, passenger, spectator target, item lore and durability, biome and light level, highest or lowest solid block, world time, weather and difficulty, living entities as values.
+- Unsure: the blind code has no build; the highest solid block is not done because `block_type_at` does not tell solid blocks.

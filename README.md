@@ -98,8 +98,9 @@ What does not work yet on arismoko/horizon (each is marked `TODO(arismoko-api: .
 - `cancel event` in `on damage` cannot stop the hit (the damage hook has a level host that cannot run the scripts; HMOD-GAP(damage-cancel)).
 - A stack's custom name is not read, `has played before` is approximated (no join-history call on main), and titles go through the vanilla `title` command.
 - Script commands have no native argument parsing: the line is parsed by the mod, so there is no client-side completion or `player` selectors for their arguments. `prefix:`, `cooldown storage:`, `suggestions:` and `subcommand` entries of a command are read but not used; `every day at 12:00` and `every <realtime>` are not parsed.
-- About 650 syntax classes of Skript 2.17.1 are still missing (most effects, conditions, expressions, events and types); the types without a value variant (vector, inventory, slot, potion effect, boss bar, display and others) cannot be added without a new value model. See HMOD_PORT.md round 3 for what exists.
+- About 640 syntax classes of Skript 2.17.1 are still missing (most effects, conditions, expressions, events and types); the types without a value variant (vector, inventory, slot, potion effect, boss bar, display and others) cannot be added without a new value model. See HMOD_PORT.md round 3 for what exists.
 - `set block` by name needs the block's default state; `summon` with NBT, hiding effect particles and the respawn point use workarounds or are missing.
+- Expressions that need data the engine does not give yet (ping, fly and walk speed, total experience, velocity, respawn location, vehicle, item lore, biome, world time and weather) are missing; see HMOD_PORT.md round 4.
 - Particle names are limited to a fixed list of about 50.
 
 ## Licence
