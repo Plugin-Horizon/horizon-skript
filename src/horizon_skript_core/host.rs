@@ -52,6 +52,53 @@ pub struct EntityInfo {
     pub location: Location,
 }
 
+/// More read-outs of a player or an entity than [`PlayerState`] has: what `fly speed of`, `fire
+/// time of`, `velocity of`, `is on ground` and the like read. The glue fills what the engine
+/// offers; the default is an entity that stands still, healthy and visible.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Vitals {
+    /// Flying and walking speed as the abilities hold them (0.05 and 0.1 are vanilla's).
+    pub fly_speed: f64,
+    pub walk_speed: f64,
+    /// Total experience points.
+    pub exp_total: i64,
+    pub saturation: f64,
+    pub absorption: f64,
+    /// Remaining fire ticks (0 is not burning), air supply and its maximum in ticks, and the
+    /// ticks of powder snow freezing.
+    pub fire_ticks: i64,
+    pub air: i64,
+    pub max_air: i64,
+    pub frozen_ticks: i64,
+    /// Velocity in blocks per tick.
+    pub velocity: [f64; 3],
+    pub on_ground: bool,
+    pub invisible: bool,
+    pub sleeping: bool,
+    pub gliding: bool,
+    pub blocking: bool,
+    pub glowing: bool,
+    pub silent: bool,
+    pub invulnerable: bool,
+    /// The entity it rides, and the ones that ride it.
+    pub vehicle: Option<u128>,
+    pub passengers: Vec<u128>,
+    /// Where it respawns (its bed or anchor, or the point `/spawnpoint` set), if it has one.
+    pub respawn: Option<Location>,
+}
+
+/// What a world says about its clock and weather.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct WorldInfo {
+    /// The time of day in ticks (0 to 23999 once wrapped).
+    pub day_time: i64,
+    pub game_time: i64,
+    pub raining: bool,
+    pub thundering: bool,
+    /// `peaceful`, `easy`, `normal` or `hard`.
+    pub difficulty: String,
+}
+
 /// A particle as a script draws it (`force draw 12 rgb(255, 0, 0) dust particle of size 1 at ...`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ParticleSpec {
@@ -86,6 +133,22 @@ pub trait Host {
     /// Whether the namespaced item id exists. Checked when a script names an item type.
     fn is_item_type(&self, _id: &str) -> bool {
         true
+    }
+    /// The extra read-outs of an online player or an entity (by UUID); `None` when unknown.
+    fn vitals(&self, _uuid: u128) -> Option<Vitals> {
+        None
+    }
+    /// The clock and weather of a world (by its script name).
+    fn world_info(&self, _world: &str) -> Option<WorldInfo> {
+        None
+    }
+    /// The namespaced biome id at a location, `None` when the chunk is not loaded.
+    fn biome_at(&self, _loc: &Location) -> Option<String> {
+        None
+    }
+    /// Whether the first living entity can see the second, `None` when the engine cannot say.
+    fn line_of_sight(&self, _from: u128, _to: u128) -> Option<bool> {
+        None
     }
     /// Whether the namespaced entity id exists.
     fn is_entity_type(&self, _id: &str) -> bool {
@@ -268,6 +331,43 @@ pub trait Actions {
     ) -> bool {
         false
     }
+    /// Sets one flag of a player or an entity: `invisible`, `glowing`, `silent`, `invulnerable`.
+    fn set_flag(&self, _uuid: u128, _flag: &str, _on: bool) -> bool {
+        false
+    }
+    /// Sets the fire ticks left (0 puts the fire out) and the air supply in ticks.
+    fn set_fire_ticks(&self, _uuid: u128, _ticks: i64) -> bool {
+        false
+    }
+    fn set_air(&self, _uuid: u128, _ticks: i64) -> bool {
+        false
+    }
+    /// Sets the velocity of an entity, in blocks per tick.
+    fn set_velocity(&self, _uuid: u128, _velocity: [f64; 3]) -> bool {
+        false
+    }
+    /// Sets the player's abilities: may fly, is flying, fly speed, walk speed (each when given).
+    fn set_abilities(
+        &self,
+        _uuid: u128,
+        _may_fly: Option<bool>,
+        _flying: Option<bool>,
+        _fly_speed: Option<f64>,
+        _walk_speed: Option<f64>,
+    ) -> bool {
+        false
+    }
+    /// Sets the absorption hearts' health points, and a player's saturation.
+    fn set_absorption(&self, _uuid: u128, _points: f64) -> bool {
+        false
+    }
+    fn set_saturation(&self, _uuid: u128, _saturation: f64) -> bool {
+        false
+    }
+    /// Respawns a dead player at once.
+    fn respawn(&self, _uuid: u128) -> bool {
+        false
+    }
     /// Sets where a player respawns.
     fn set_respawn(&self, _uuid: u128, _at: &Location) -> bool {
         false
@@ -307,6 +407,14 @@ pub struct Recorder {
     pub mobs: Vec<(u128, PlayerState)>,
     /// Equipment by (uuid, slot) (what `equipment` returns).
     pub equipment: Vec<(u128, String, ItemStack)>,
+    /// Extra read-outs by UUID (what `vitals` returns).
+    pub vitals: Vec<(u128, Vitals)>,
+    /// Clock and weather by world name (what `world_info` returns).
+    pub worlds: Vec<(String, WorldInfo)>,
+    /// Biome ids by exact location (what `biome_at` returns).
+    pub biomes: Vec<(Location, String)>,
+    /// Pairs (looker, target) with a line of sight; any other pair has none.
+    pub sight: Vec<(u128, u128)>,
 }
 
 impl Recorder {
@@ -385,6 +493,21 @@ impl Host for Recorder {
     fn script_action(&self, action: &str, name: &str) -> bool {
         self.acted.borrow_mut().push(format!("script {action} {name}"));
         true
+    }
+    fn vitals(&self, uuid: u128) -> Option<Vitals> {
+        self.vitals.iter().find(|(u, _)| *u == uuid).map(|(_, v)| v.clone())
+    }
+    fn world_info(&self, world: &str) -> Option<WorldInfo> {
+        self.worlds
+            .iter()
+            .find(|(w, _)| w.eq_ignore_ascii_case(world))
+            .map(|(_, i)| i.clone())
+    }
+    fn biome_at(&self, loc: &Location) -> Option<String> {
+        self.biomes.iter().find(|(l, _)| l == loc).map(|(_, b)| b.clone())
+    }
+    fn line_of_sight(&self, from: u128, to: u128) -> Option<bool> {
+        Some(self.sight.contains(&(from, to)))
     }
     fn append_log(&self, file: &str, line: &str) -> bool {
         self.acted.borrow_mut().push(format!("logfile {file} {line}"));
@@ -531,6 +654,53 @@ impl Actions for Recorder {
         self.acted
             .borrow_mut()
             .push(format!("equip {uuid} {slot} {id:?}{named}"));
+        true
+    }
+    fn set_flag(&self, uuid: u128, flag: &str, on: bool) -> bool {
+        self.acted.borrow_mut().push(format!("flag {uuid} {flag} {on}"));
+        true
+    }
+    fn set_fire_ticks(&self, uuid: u128, ticks: i64) -> bool {
+        self.acted.borrow_mut().push(format!("fire {uuid} {ticks}"));
+        true
+    }
+    fn set_air(&self, uuid: u128, ticks: i64) -> bool {
+        self.acted.borrow_mut().push(format!("air {uuid} {ticks}"));
+        true
+    }
+    fn set_velocity(&self, uuid: u128, velocity: [f64; 3]) -> bool {
+        self.acted
+            .borrow_mut()
+            .push(format!("velocity {uuid} {velocity:?}"));
+        true
+    }
+    fn set_abilities(
+        &self,
+        uuid: u128,
+        may_fly: Option<bool>,
+        flying: Option<bool>,
+        fly_speed: Option<f64>,
+        walk_speed: Option<f64>,
+    ) -> bool {
+        self.acted.borrow_mut().push(format!(
+            "abilities {uuid} may_fly={may_fly:?} flying={flying:?} fly_speed={fly_speed:?} walk_speed={walk_speed:?}"
+        ));
+        true
+    }
+    fn set_absorption(&self, uuid: u128, points: f64) -> bool {
+        self.acted
+            .borrow_mut()
+            .push(format!("absorption {uuid} {points}"));
+        true
+    }
+    fn set_saturation(&self, uuid: u128, saturation: f64) -> bool {
+        self.acted
+            .borrow_mut()
+            .push(format!("saturation {uuid} {saturation}"));
+        true
+    }
+    fn respawn(&self, uuid: u128) -> bool {
+        self.acted.borrow_mut().push(format!("force respawn {uuid}"));
         true
     }
     fn set_respawn(&self, uuid: u128, at: &Location) -> bool {

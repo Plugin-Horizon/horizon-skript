@@ -12,7 +12,8 @@
 pub mod horizon_skript_core;
 use crate::horizon_skript_core::Registry;
 use crate::horizon_skript_core::host::{
-    Actions, EntityInfo, Host as SkHost, ItemStack as SkItemStack, ParticleSpec, PlayerState,
+    Actions, EntityInfo, Host as SkHost, ItemStack as SkItemStack, ParticleSpec, PlayerState, Vitals,
+    WorldInfo,
 };
 use crate::horizon_skript_core::manager::{self, Manager};
 use crate::horizon_skript_core::run::Event;
@@ -370,6 +371,95 @@ impl SkHost for Bridge<'_> {
         })
     }
 
+    // The extra read-outs of a player or an entity: abilities, food, experience, fire, air,
+    // velocity, vehicle, passengers, sleeping, gliding, blocking, flags and the respawn point.
+    // The fall distance and the ping have no engine read (see GAPS_UPSTREAM.md), so scripts do
+    // not get them.
+    fn vitals(&self, uuid: u128) -> Option<Vitals> {
+        self.with(|h| {
+            let (_, e) = entity_with_dimension(h, uuid)?;
+            let living = h.living(e);
+            let player = h.player(uuid);
+            let abilities = player.and_then(|p| p.abilities(&*h));
+            let food = player.and_then(|p| p.food(&*h));
+            let exp = player.and_then(|p| p.experience(&*h));
+            let vehicle_ref = e.vehicle(&*h);
+            let passenger_refs = e.passengers(&*h).unwrap_or_default();
+            let vehicle = vehicle_ref.and_then(|v| v.uuid(h));
+            let passengers: Vec<u128> = passenger_refs.into_iter().filter_map(|p| p.uuid(h)).collect();
+            let respawn = player
+                .and_then(|p| p.respawn_config(&*h))
+                .flatten()
+                .map(|c| {
+                    let pos = c.position.pos();
+                    Location {
+                        world: self.world_of(&c.position.dimension().to_string()),
+                        x: f64::from(pos.x) + 0.5,
+                        y: f64::from(pos.y),
+                        z: f64::from(pos.z) + 0.5,
+                        yaw: c.yaw,
+                        pitch: 0.0,
+                    }
+                });
+            Some(Vitals {
+                fly_speed: abilities.map_or(0.05, |a| f64::from(a.fly_speed)),
+                walk_speed: abilities.map_or(0.1, |a| f64::from(a.walk_speed)),
+                exp_total: exp.map_or(0, |x| i64::from(x.total)),
+                saturation: food.map_or(0.0, |f| f64::from(f.saturation)),
+                absorption: living
+                    .and_then(|l| l.absorption(&*h))
+                    .map_or(0.0, f64::from),
+                fire_ticks: e.fire_ticks(&*h).map_or(0, i64::from),
+                air: e.air_supply(&*h).map_or(300, i64::from),
+                max_air: e.max_air_supply(&*h).map_or(300, i64::from),
+                frozen_ticks: e.ticks_frozen(&*h).map_or(0, i64::from),
+                velocity: e.velocity(&*h).unwrap_or([0.0; 3]),
+                on_ground: e.on_ground(&*h).unwrap_or(false),
+                invisible: e.is_invisible(&*h).unwrap_or(false),
+                sleeping: living.and_then(|l| l.is_sleeping(&*h)).unwrap_or(false),
+                gliding: living.and_then(|l| l.is_gliding(&*h)).unwrap_or(false),
+                blocking: living.and_then(|l| l.is_blocking(&*h)).unwrap_or(false),
+                glowing: e.glowing(&*h).unwrap_or(false),
+                silent: e.is_silent(&*h).unwrap_or(false),
+                invulnerable: e.permanently_invulnerable(&*h).unwrap_or(false),
+                vehicle,
+                passengers,
+                respawn,
+            })
+        })
+    }
+
+    // The clock and weather of a world's level.
+    fn world_info(&self, world: &str) -> Option<WorldInfo> {
+        let dimension = self.dimension_of(world)?;
+        self.with(|h| {
+            let level = h.level(dimension)?;
+            Some(WorldInfo {
+                day_time: level.day_time(&*h).unwrap_or(0),
+                game_time: level.game_time(&*h).unwrap_or(0),
+                raining: level.is_raining(&*h).unwrap_or(false),
+                thundering: level.is_thundering(&*h).unwrap_or(false),
+                difficulty: level.difficulty(&*h).unwrap_or("normal").to_owned(),
+            })
+        })
+    }
+
+    fn biome_at(&self, loc: &Location) -> Option<String> {
+        let dimension = self.dimension_of(&loc.world)?;
+        self.with(|h| {
+            let level = h.level(dimension)?;
+            level.biome_at(&*h, [loc.x.floor() as i32, loc.y.floor() as i32, loc.z.floor() as i32])
+        })
+    }
+
+    fn line_of_sight(&self, from: u128, to: u128) -> Option<bool> {
+        self.with(|h| {
+            let (_, a) = entity_with_dimension(h, from)?;
+            let (_, b) = entity_with_dimension(h, to)?;
+            h.living(a)?.has_line_of_sight(&*h, b)
+        })
+    }
+
     // The item in a helmet, chestplate, leggings or boots slot of an online player or an NPC.
     // Only the item id is kept (the core reads the id); the count is the stack's.
     // TODO(arismoko-api: item_custom_name): the stack's custom name is not read, so `name` is None.
@@ -390,6 +480,99 @@ impl SkHost for Bridge<'_> {
 impl Actions for Bridge<'_> {
     fn run_console(&self, line: &str) -> bool {
         self.with(|h| run_console_line(h, line))
+    }
+
+    fn set_flag(&self, uuid: u128, flag: &str, on: bool) -> bool {
+        self.with(|h| {
+            let Some((_, e)) = entity_with_dimension(h, uuid) else {
+                return false;
+            };
+            match flag {
+                "invisible" => e.set_invisible(h, on),
+                "glowing" => e.set_glowing(h, on),
+                "silent" => e.set_silent(h, on),
+                "invulnerable" => e.set_invulnerable(h, on),
+                _ => false,
+            }
+        })
+    }
+
+    fn set_fire_ticks(&self, uuid: u128, ticks: i64) -> bool {
+        self.with(|h| {
+            let Some((_, e)) = entity_with_dimension(h, uuid) else {
+                return false;
+            };
+            e.set_remaining_fire_ticks(h, ticks.clamp(0, i64::from(i32::MAX)) as i32)
+        })
+    }
+
+    fn set_air(&self, uuid: u128, ticks: i64) -> bool {
+        self.with(|h| {
+            let Some((_, e)) = entity_with_dimension(h, uuid) else {
+                return false;
+            };
+            e.set_air_supply(h, ticks.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32)
+        })
+    }
+
+    fn set_velocity(&self, uuid: u128, velocity: [f64; 3]) -> bool {
+        self.with(|h| {
+            let Some((_, e)) = entity_with_dimension(h, uuid) else {
+                return false;
+            };
+            e.set_velocity(h, velocity)
+        })
+    }
+
+    fn set_abilities(
+        &self,
+        uuid: u128,
+        may_fly: Option<bool>,
+        flying: Option<bool>,
+        fly_speed: Option<f64>,
+        walk_speed: Option<f64>,
+    ) -> bool {
+        self.with(|h| {
+            let Some(p) = h.player(uuid) else {
+                return false;
+            };
+            let Some(mut a) = p.abilities(&*h) else {
+                return false;
+            };
+            if let Some(v) = may_fly {
+                a.may_fly = v;
+            }
+            if let Some(v) = flying {
+                a.flying = v;
+            }
+            if let Some(v) = fly_speed {
+                a.fly_speed = v as f32;
+            }
+            if let Some(v) = walk_speed {
+                a.walk_speed = v as f32;
+            }
+            p.set_abilities(h, a)
+        })
+    }
+
+    fn set_absorption(&self, uuid: u128, points: f64) -> bool {
+        self.with(|h| {
+            let Some((_, e)) = entity_with_dimension(h, uuid) else {
+                return false;
+            };
+            h.living(e).is_some_and(|l| l.set_absorption(h, points.max(0.0) as f32))
+        })
+    }
+
+    fn set_saturation(&self, uuid: u128, saturation: f64) -> bool {
+        self.with(|h| {
+            h.player(uuid)
+                .is_some_and(|p| p.set_saturation(h, saturation.max(0.0) as f32))
+        })
+    }
+
+    fn respawn(&self, uuid: u128) -> bool {
+        self.with(|h| h.player(uuid).is_some_and(|p| p.respawn(h).is_ok()))
     }
 
     fn set_game_mode(&self, uuid: u128, mode: i32) -> bool {
