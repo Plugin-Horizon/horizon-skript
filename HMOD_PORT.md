@@ -114,7 +114,7 @@ Round 4 (conditions, blind)
 
 Round 4 (expressions, blind)
 - Added expressions (`expressions/more2.rs`, 2 new classes plus 4 forms of existing ones): `round`, `round down|floored`, `round up|ceiled` on numbers and lists (half up, as Java `Math.round`, integer result); `%numbers% in degrees|radians` (a radian value is turned into degrees, as `ExprAngle`); `first|last [N] character(s) of %text%`; `name of %world%`.
-- Gaps (need an engine API, listed in `/home/leo/horizon-wt/audit/GAPS_UPSTREAM.md` under skript): ping, fly and walk speed, total experience, fall distance, fire ticks, air, saturation, absorption, velocity, respawn and bed location, vehicle, passenger, spectator target, item lore and durability, biome and light level, highest or lowest solid block, world time, weather and difficulty, living entities as values.
+- Gaps (need an engine API, listed in the upstream gap list under skript): ping, fly and walk speed, total experience, fall distance, fire ticks, air, saturation, absorption, velocity, respawn and bed location, vehicle, passenger, spectator target, item lore and durability, biome and light level, highest or lowest solid block, world time, weather and difficulty, living entities as values.
 - Unsure: the blind code has no build; the highest solid block is not done because `block_type_at` does not tell solid blocks.
 
 Round 5 (events and types, blind)
@@ -125,6 +125,6 @@ Round 5 (events and types, blind)
 
 Round 6 (effects, blind)
 - Added effect `sort` (`syntax/effects/sorting.rs`): `sort %objects% [in descending|ascending order]` on a list variable, natural order (numbers by value, text in lower case); entries of mixed kinds stay as they are; only direct entries are renumbered. The `by <expression>` and `based on` forms are not parsed (they need the input expression). Effects now 23 of 153 by the audit count (22 before).
-- Gaps (need an engine API): 88 effects, listed in 15 lines under `skript` in `/home/leo/horizon-wt/audit/GAPS_UPSTREAM.md` (flight, sprint/sleep/swing states, respawn, entity flags, fire, explosions, mob AI, potion flags, block changes, event cancels, item meta, boss bar flags, visibility, world and server calls, transfer). Their upper bound is 111 of 153 effects.
+- Gaps (need an engine API): 88 effects, listed in 15 lines under `skript` in the upstream gap list (flight, sprint/sleep/swing states, respawn, entity flags, fire, explosions, mob AI, potion flags, block changes, event cancels, item meta, boss bar flags, visibility, world and server calls, transfer). Their upper bound is 111 of 153 effects.
 - Not done, core work (no engine API): `<effect> if <condition>` (`EffDoIf`), `assert`, `continue`, `debug`, `log ... to file`, `run`, script file enable/reload/unload, `transform ... using`, suppress-warnings sections, and the `sort ... by` form.
 - Unsure: blind, nothing built or run. Unit tests in `sorting.rs` use literal values (natural order, descending, mixed kinds).
