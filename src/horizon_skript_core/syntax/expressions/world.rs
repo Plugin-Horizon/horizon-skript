@@ -158,7 +158,53 @@ fn location_from_coordinates(cx: &mut Ctx<'_>, m: &Matched) -> Result<Value, Run
     }))
 }
 
+/// `nearest %entity types% (to|from|of|around|relative to) %location/player%`: the closest entity of
+/// the wanted types in the centre's world, nothing when there is none. Online players count as
+/// `minecraft:player` and other player-type entities (NPCs) come from the world's entities, as in
+/// `entities_where`. Ties keep the first entity found.
+fn nearest(cx: &mut Ctx<'_>, m: &Matched) -> Result<Value, RunError> {
+    let wanted = wanted_types(slot(cx, m, 0)?)?;
+    let at = slot(cx, m, 1)?;
+    let centre = location_of(cx, &at)?;
+    let dist = |p: &Location| {
+        ((p.x - centre.x).powi(2) + (p.y - centre.y).powi(2) + (p.z - centre.z).powi(2)).sqrt()
+    };
+    let mut candidates: Vec<(f64, Value)> = Vec::new();
+    if wanted.iter().any(|w| kind_matches("minecraft:player", w)) {
+        for (uuid, name) in cx.host.online_players() {
+            if let Some(state) = cx.host.player_state(uuid) {
+                if state.location.world.eq_ignore_ascii_case(&centre.world) {
+                    candidates.push((dist(&state.location), Value::Player { uuid, name }));
+                }
+            }
+        }
+    }
+    for e in cx.host.entities_in_world(&centre.world) {
+        if e.kind != "minecraft:player"
+            && e.location.world.eq_ignore_ascii_case(&centre.world)
+            && wanted.iter().any(|w| kind_matches(&e.kind, w))
+        {
+            candidates.push((dist(&e.location), entity_value(&e)));
+        }
+    }
+    let mut best: Option<(f64, Value)> = None;
+    for (d, v) in candidates {
+        match &best {
+            Some((b, _)) if *b <= d => {}
+            _ => best = Some((d, v)),
+        }
+    }
+    Ok(best.map_or(Value::Null, |(_, v)| v))
+}
+
 pub fn register(reg: &mut Registry) -> Result<(), PatternError> {
+    reg.add_expression(
+        "nearest entity",
+        &["[the] nearest %entity types% (to|from|of|around|relative to) %location/player%"],
+        0,
+        "object",
+        nearest,
+    )?;
     reg.add_expression(
         "entities of type in worlds",
         &["[(all [[of] the]|the)] %entity types% in %worlds%"],
@@ -266,6 +312,24 @@ mod tests {
             ),
             "zombie"
         );
+    }
+
+    #[test]
+    fn nearest_entity_of_a_type_and_the_type_of_a_player() {
+        let mut h = Recorder::with_players(&[(7, "Alice")]);
+        h.entities = vec![
+            mob(1, "minecraft:zombie", "w", 50.0),
+            mob(2, "minecraft:cow", "w", 1.0),
+        ];
+        assert_eq!(
+            expr(&h, "nearest cow to location(0, 64, 0, world \"w\")"),
+            "cow"
+        );
+        assert_eq!(
+            expr(&h, "nearest zombie to location(0, 64, 0, world \"w\")"),
+            "zombie"
+        );
+        assert_eq!(expr(&h, "entity type of Alice"), "player");
     }
 
     #[test]

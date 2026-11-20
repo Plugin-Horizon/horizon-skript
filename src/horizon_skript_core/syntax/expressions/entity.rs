@@ -105,7 +105,27 @@ fn head_location(cx: &mut Ctx<'_>, m: &Matched) -> Result<Value, RunError> {
     }))
 }
 
+/// `entity type of %entity%`: a player is of the player type; any other entity value is already
+/// its entity type, so it is returned as it is.
+fn type_of_entity(cx: &mut Ctx<'_>, m: &Matched) -> Result<Value, RunError> {
+    match slot(cx, m, 0)? {
+        Value::Player { .. } => Ok(Value::EntityType("minecraft:player".to_owned())),
+        Value::EntityType(id) => Ok(Value::EntityType(id)),
+        other => Err(RunError::new(format!(
+            "expected an entity, got {}",
+            other.class()
+        ))),
+    }
+}
+
 pub fn register(reg: &mut Registry) -> Result<(), PatternError> {
+    reg.add_expression(
+        "entity type of entity",
+        &["[the] entity type of %entity%"],
+        0,
+        "entity type",
+        type_of_entity,
+    )?;
     reg.add_expression(
         "entities in world",
         &["all entities in world %text%"],
