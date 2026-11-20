@@ -1,7 +1,7 @@
 # hmod port: skript
 Parity: ~25% now / ~25% with our PRs (estimate: about 288 of 1168 audited items; the audit count of 146 was taken before round 3)
 
-Parity: ~13 % now / not measured with our PRs (about 147 of 1168 Skript classes, approximate count from the audit; the audit list is in /home/leo/horizon-wt/audit/skript.md)
+Parity: ~15 % now / not measured with our PRs (about 179 of 1168 Skript classes, approximate count from the audit; the audit list is in /home/leo/horizon-wt/audit/skript.md)
 Round 1
 - Fixed: src/lib.rs `has_permission` (script `permission:` nodes and `player has permission`): `PlayerRef::has_permission` replaced by a typed `permission_bool` query on a `PermissionNode` built from the node name; any error is a denial.
 - Fixed: src/lib.rs `player_commands_sent` and `player_command`: `has_permission(SKRIPT_NODE)` replaced by typed `permission_bool` on `skript_node()`.
@@ -50,3 +50,15 @@ Round 4 (expressions, blind)
 - Added expressions (`expressions/more2.rs`, 2 new classes plus 4 forms of existing ones): `round`, `round down|floored`, `round up|ceiled` on numbers and lists (half up, as Java `Math.round`, integer result); `%numbers% in degrees|radians` (a radian value is turned into degrees, as `ExprAngle`); `first|last [N] character(s) of %text%`; `name of %world%`.
 - Gaps (need an engine API, listed in `/home/leo/horizon-wt/audit/GAPS_UPSTREAM.md` under skript): ping, fly and walk speed, total experience, fall distance, fire ticks, air, saturation, absorption, velocity, respawn and bed location, vehicle, passenger, spectator target, item lore and durability, biome and light level, highest or lowest solid block, world time, weather and difficulty, living entities as values.
 - Unsure: the blind code has no build; the highest solid block is not done because `block_type_at` does not tell solid blocks.
+
+Round 5 (events and types, blind)
+- Added events (56 -> 86 registrations, 30 new, in `events/world.rs`, `events/player_more.rs`, `events/craft.rs`; hooks appended to the end of the impl in `src/lib.rs`): vehicle create, destroy, damage (cancellable) and move; portal create and portal enter; chunk load and unload; explode; item despawn; anvil damage; projectile hit (cancellable); pick item (cancellable); stop using item; ready arrow; deep sleep; egg throw; elytra boost; bucket entity; beacon effect change; player input; experience cooldown change; stonecutter recipe select; craft; prepare enchant; enchant; furnace smelt; brewing complete, start and fuel. Each has a load test in its file.
+- Added types (2 enum classes, `classes_more.rs`, read by `classes.rs` through `enum_classes()`): damage source and game rule value, both as text with any word.
+- Gaps: the events of the level-host hooks (piston extend and retract, block spread, fade, form, ignite and burn, leaves decay, sponge absorb, bell ring, entity heal and jump, enderman enrage) do not fire, because those hooks get a level host and cannot run scripts; listed in GAPS_UPSTREAM.md. `bucket fill` is not added (the engine event has no player and no readable stack). `prepare craft` is not added (the hook returns an item stack this code does not build). `on <event> of <type>` filters are not parsed. Types with a value variant of their own (vector, inventory, slot, potion effect, and others) still need a new value model.
+- Unsure: all of this was written blind, not built or run. The events with no dimension in the engine (vehicle create and destroy, item despawn, furnace smelt, brewing, chunk events) read the overworld, as the item spawn event does. The count test in `events/mod.rs` was updated to 86.
+
+Round 5 (effects, blind)
+- Added effect `sort` (`syntax/effects/sorting.rs`): `sort %objects% [in descending|ascending order]` on a list variable, natural order (numbers by value, text in lower case); entries of mixed kinds stay as they are; only direct entries are renumbered. The `by <expression>` and `based on` forms are not parsed (they need the input expression). Effects now 23 of 153 by the audit count (22 before).
+- Gaps (need an engine API): 88 effects, listed in 15 lines under `skript` in `/home/leo/horizon-wt/audit/GAPS_UPSTREAM.md` (flight, sprint/sleep/swing states, respawn, entity flags, fire, explosions, mob AI, potion flags, block changes, event cancels, item meta, boss bar flags, visibility, world and server calls, transfer). Their upper bound is 111 of 153 effects.
+- Not done, core work (no engine API): `<effect> if <condition>` (`EffDoIf`), `assert`, `continue`, `debug`, `log ... to file`, `run`, script file enable/reload/unload, `transform ... using`, suppress-warnings sections, and the `sort ... by` form.
+- Unsure: blind, nothing built or run. Unit tests in `sorting.rs` use literal values (natural order, descending, mixed kinds).

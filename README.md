@@ -90,7 +90,7 @@ horizon-launcher native-build <path to this folder> --server-output <dir> --vers
 
 ## Known gaps
 
-- Effects and conditions beyond the common ones (about 38 of 153 effect classes and 31 of 170 condition classes exist): no entity-flag effects or conditions (ignite, sprint, fly, glide, sleep), no `restart server`; see HMOD_PORT.md round 3 for the list.
+- Effects and conditions beyond the common ones (about 39 of 153 effect classes and 31 of 170 condition classes exist): no entity-flag effects or conditions (ignite, sprint, fly, glide, sleep), no `restart server`; see HMOD_PORT.md round 3 for the list.
 
 What does not work yet on arismoko/horizon (each is marked `TODO(arismoko-api: ...)` in `src/lib.rs`):
 
@@ -98,9 +98,10 @@ What does not work yet on arismoko/horizon (each is marked `TODO(arismoko-api: .
 - `cancel event` in `on damage` cannot stop the hit (the damage hook has a level host that cannot run the scripts; HMOD-GAP(damage-cancel)).
 - A stack's custom name is not read, `has played before` is approximated (no join-history call on main), and titles go through the vanilla `title` command.
 - Script commands have no native argument parsing: the line is parsed by the mod, so there is no client-side completion or `player` selectors for their arguments. `prefix:`, `cooldown storage:`, `suggestions:` and `subcommand` entries of a command are read but not used; `every day at 12:00` and `every <realtime>` are not parsed.
-- About 640 syntax classes of Skript 2.17.1 are still missing (most effects, conditions, expressions, events and types); the types without a value variant (vector, inventory, slot, potion effect, boss bar, display and others) cannot be added without a new value model. See HMOD_PORT.md round 3 for what exists.
+- About 610 syntax classes of Skript 2.17.1 are still missing (most effects, conditions, expressions, events and types); the types without a value variant (vector, inventory, slot, potion effect, boss bar, display and others) cannot be added without a new value model. See HMOD_PORT.md round 3 for what exists.
 - `set block` by name needs the block's default state; `summon` with NBT, hiding effect particles and the respawn point use workarounds or are missing.
 - Expressions that need data the engine does not give yet (ping, fly and walk speed, total experience, velocity, respawn location, vehicle, item lore, biome, world time and weather) are missing; see HMOD_PORT.md round 4.
+- Events of the level-host hooks (piston extend and retract, block spread, fade, form, ignite and burn, leaves decay, sponge absorb, bell ring, entity heal and jump, enderman enrage) never fire; the engine hands those hooks a level host, which cannot run scripts. See HMOD_PORT.md round 5.
 - Particle names are limited to a fixed list of about 50.
 
 ## Licence
