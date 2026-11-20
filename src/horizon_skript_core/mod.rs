@@ -7,6 +7,7 @@
 
 pub mod builtins;
 pub mod classes;
+pub mod classes_more;
 pub mod config;
 pub mod error;
 pub mod expr;

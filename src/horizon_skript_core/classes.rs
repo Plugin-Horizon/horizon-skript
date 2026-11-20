@@ -102,9 +102,14 @@ fn plural_of(class: &str) -> String {
     }
 }
 
+/// Every enum class: `ENUM_CLASSES` and the ones in `classes_more`.
+fn enum_classes() -> impl Iterator<Item = &'static (&'static str, &'static [&'static str])> {
+    ENUM_CLASSES.iter().chain(super::classes_more::MORE_ENUM_CLASSES.iter())
+}
+
 /// Whether `class` is one of the fixed-word enum classes.
 pub fn is_enum(class: &str) -> bool {
-    ENUM_CLASSES.iter().any(|(name, _)| *name == class)
+    enum_classes().any(|(name, _)| *name == class)
 }
 
 /// Every class name the core knows: core, extra and enum classes (not the aliases).
@@ -113,7 +118,7 @@ pub fn all_class_names() -> Vec<&'static str> {
         .iter()
         .chain(EXTRA_CLASSES)
         .copied()
-        .chain(ENUM_CLASSES.iter().map(|(name, _)| *name))
+        .chain(enum_classes().map(|(name, _)| *name))
         .collect()
 }
 
@@ -191,9 +196,7 @@ pub fn accepts(want: &str, have: &str) -> bool {
 /// Whether `class` is an enum class with a fixed list of words, so a bare word in a script can be
 /// told from other text.
 pub fn is_strict_enum(class: &str) -> bool {
-    ENUM_CLASSES
-        .iter()
-        .any(|(name, words)| *name == class && !words.is_empty())
+    enum_classes().any(|(name, words)| *name == class && !words.is_empty())
 }
 
 /// The words of an enum class as scripts write them: lower case, `_` and `-` read as spaces.
@@ -310,7 +313,7 @@ pub fn parse_value(class: &str, text: &str, host: &dyn Host) -> Option<Value> {
         "uuid" => parse_uuid(t),
         "color" => parse_colour(t),
         w => {
-            let (_, words) = ENUM_CLASSES.iter().find(|(name, _)| *name == w)?;
+            let (_, words) = enum_classes().find(|(name, _)| *name == w)?;
             let word = enum_word(t);
             (!word.is_empty() && (words.is_empty() || words.contains(&word.as_str())))
                 .then_some(Value::Text(word))
