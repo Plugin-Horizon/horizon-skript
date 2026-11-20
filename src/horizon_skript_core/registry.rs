@@ -83,6 +83,8 @@ pub enum Flow {
     Stop,
     /// Leave this many sections, or loops only (`stop loop`, `exit 2 sections`).
     Exit { levels: usize, loops_only: bool },
+    /// Skip to the next item of the `level`th enclosing loop, 1 being the innermost (`continue`).
+    Continue { level: usize },
     /// Leave the function with a value (`return`).
     Return(Option<Value>),
 }

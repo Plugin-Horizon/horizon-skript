@@ -276,6 +276,11 @@ impl Run {
                                 return Outcome::Failed(e, *line);
                             }
                         }
+                        Ok(Flow::Continue { level }) => {
+                            if let Err(e) = self.continue_loop(level) {
+                                return Outcome::Failed(e, *line);
+                            }
+                        }
                         Ok(Flow::Return(value)) => {
                             self.ret = value;
                             self.frames.clear();
@@ -422,6 +427,25 @@ impl Run {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// `continue`: drops the sections inside the `level`th loop (1 is the innermost) and ends
+    /// that loop's current pass, so its next item (or its condition check) comes next.
+    fn continue_loop(&mut self, level: usize) -> Result<(), RunError> {
+        let loops: Vec<usize> = self
+            .frames
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| !matches!(f.kind, Kind::Block))
+            .map(|(i, _)| i)
+            .collect();
+        let Some(&at) = level.checked_sub(1).and_then(|n| loops.iter().rev().nth(n)) else {
+            return Err(RunError::new("there is no loop to continue"));
+        };
+        self.frames.truncate(at + 1);
+        let frame = self.frames.last_mut().expect("a frame");
+        frame.pc = frame.body.len();
         Ok(())
     }
 

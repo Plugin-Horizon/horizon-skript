@@ -36,6 +36,25 @@ pub fn register(reg: &mut Registry) -> Result<(), PatternError> {
         exit_section,
     )?;
     reg.add_effect(
+        "continue",
+        &["continue [this loop|[the] [current] loop]"],
+        0,
+        |_: &mut Ctx<'_>, _: &Matched| Ok(Flow::Continue { level: 1 }),
+    )?;
+    reg.add_effect(
+        "continue nth",
+        &["continue [the] <[0-9]+>(st|nd|rd|th) loop"],
+        0,
+        |_: &mut Ctx<'_>, m: &Matched| {
+            let n: usize = m
+                .regex(0)
+                .and_then(|s| s.parse().ok())
+                .filter(|n| *n > 0)
+                .ok_or_else(|| RunError::new("continue needs a loop number from 1"))?;
+            Ok(Flow::Continue { level: n })
+        },
+    )?;
+    reg.add_effect(
         "exit n",
         &["(stop|exit) <[0-9]+> (1¦loops|2¦sections)"],
         0,

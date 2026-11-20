@@ -8,7 +8,7 @@ use crate::horizon_skript_core::error::{RunError, ScriptError};
 use crate::horizon_skript_core::expr::{Expr, Parser};
 use crate::horizon_skript_core::host::Host;
 use crate::horizon_skript_core::pattern::{Match, SlotSpec};
-use crate::horizon_skript_core::registry::{Condition, Effect, Matched, Registry};
+use crate::horizon_skript_core::registry::{Condition, Effect, Flow, Matched, Registry};
 use crate::horizon_skript_core::run::Ctx;
 use crate::horizon_skript_core::script::{self, Item, Line};
 use crate::horizon_skript_core::value::Value;
@@ -603,6 +603,8 @@ impl Reader<'_> {
                 let text = item.line.text.clone();
                 if text.eq_ignore_ascii_case("else") {
                     self.error(line, "'else' without a section", &raw);
+                } else if let Some(node) = self.compound_effect(&text, line) {
+                    nodes.push(node);
                 } else if let Some((handler, m)) = self.effect(&text) {
                     nodes.push(Node::Effect { handler, m, line });
                 } else {
@@ -713,6 +715,61 @@ impl Reader<'_> {
         Arc::new(nodes)
     }
 
+    /// The statements that wrap a condition: `<effect> if <condition>` (Skript's `EffDoIf`) and
+    /// `assert <condition> [to fail] [with [error] <text>]` (`EffAssert`). `None` when the text is
+    /// neither, or a part of it does not parse.
+    fn compound_effect(&self, text: &str, line: usize) -> Option<Node> {
+        if let Some(rest) = strip_ci(text, "assert ") {
+            let (cond_text, message) = match find_outside_quotes(rest, " with error ")
+                .or_else(|| find_outside_quotes(rest, " with "))
+            {
+                Some((pos, len)) => (&rest[..pos], Some(rest[pos + len..].trim())),
+                None => (rest, None),
+            };
+            let cond_text = cond_text.trim();
+            let (cond_text, to_fail) = match cond_text.len().checked_sub(8) {
+                Some(cut) if cond_text.is_char_boundary(cut)
+                    && cond_text[cut..].eq_ignore_ascii_case(" to fail") =>
+                {
+                    (cond_text[..cut].trim(), true)
+                }
+                _ => (cond_text, false),
+            };
+            let cond = self.condition(cond_text)?;
+            let message = match message {
+                Some(m) => Some(self.parser.expr(m, &["text"])?),
+                None => None,
+            };
+            return Some(Node::Effect {
+                handler: Arc::new(Assert {
+                    cond,
+                    to_fail,
+                    message,
+                    text: cond_text.to_owned(),
+                }),
+                m: Matched::default(),
+                line,
+            });
+        }
+        let mut from = 0;
+        while let Some((pos, len)) = find_outside_quotes(&text[from..], " if ") {
+            let at = from + pos;
+            let (lhs, rhs) = (text[..at].trim(), text[at + len..].trim());
+            from = at + len;
+            if lhs.is_empty() || rhs.is_empty() {
+                continue;
+            }
+            if let (Some((effect, m)), Some(cond)) = (self.effect(lhs), self.condition(rhs)) {
+                return Some(Node::Effect {
+                    handler: Arc::new(DoIf { effect, m, cond }),
+                    m: Matched::default(),
+                    line,
+                });
+            }
+        }
+        None
+    }
+
     /// The effect a statement is, from the registry.
     fn effect(&self, text: &str) -> Option<(Arc<dyn Effect>, Matched)> {
         self.effect_pass(text)
@@ -760,6 +817,61 @@ impl Reader<'_> {
             }
         }
         self.parser.expr(text, &["boolean"]).map(Cond::Expr)
+    }
+}
+
+/// The first place `needle` stands in `text` outside double quotes: its byte position and length.
+fn find_outside_quotes(text: &str, needle: &str) -> Option<(usize, usize)> {
+    let mut quoted = false;
+    for (i, c) in text.char_indices() {
+        if c == '"' {
+            quoted = !quoted;
+        } else if !quoted && text[i..].starts_with(needle) {
+            return Some((i, needle.len()));
+        }
+    }
+    None
+}
+
+/// `<effect> if <condition>`: the effect runs only when the condition holds.
+struct DoIf {
+    effect: Arc<dyn Effect>,
+    m: Matched,
+    cond: Cond,
+}
+
+impl Effect for DoIf {
+    fn run(&self, cx: &mut Ctx<'_>, _: &Matched) -> Result<Flow, RunError> {
+        if self.cond.check(cx)? {
+            self.effect.run(cx, &self.m)
+        } else {
+            Ok(Flow::Next)
+        }
+    }
+}
+
+/// `assert <condition> [to fail] [with error <text>]`: a failed assertion is a run error.
+struct Assert {
+    cond: Cond,
+    to_fail: bool,
+    message: Option<Expr>,
+    text: String,
+}
+
+impl Effect for Assert {
+    fn run(&self, cx: &mut Ctx<'_>, _: &Matched) -> Result<Flow, RunError> {
+        if self.cond.check(cx)? != self.to_fail {
+            return Ok(Flow::Next);
+        }
+        let detail = match &self.message {
+            Some(e) => e.eval(cx)?.to_text(),
+            None => format!(
+                "the condition `{}` {}",
+                self.text,
+                if self.to_fail { "held" } else { "did not hold" }
+            ),
+        };
+        Err(RunError::new(format!("Assertion failed: {detail}")))
     }
 }
 
@@ -952,4 +1064,65 @@ fn is_name(s: &str) -> bool {
     !s.is_empty()
         && s.chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+#[cfg(test)]
+mod flow_tests {
+    use crate::horizon_skript_core::host::Recorder;
+    use crate::horizon_skript_core::syntax::support::testing::run;
+
+    fn said(body: &str) -> (Vec<String>, Vec<String>) {
+        let host = Recorder::default();
+        let logs = run(&host, body);
+        let out = host.broadcasts.borrow().clone();
+        (out, logs)
+    }
+
+    #[test]
+    fn an_effect_with_if_runs_only_when_the_condition_holds() {
+        let (out, logs) = said(
+            "\tset {x} to 5\n\tbroadcast \"yes\" if {x} is 5\n\tbroadcast \"no\" if {x} is 6\n",
+        );
+        assert!(logs.is_empty(), "{logs:?}");
+        assert_eq!(out, vec!["yes".to_owned()]);
+    }
+
+    #[test]
+    fn an_if_inside_a_text_is_not_a_split() {
+        let (out, logs) = said("\tbroadcast \"a if b\"\n");
+        assert!(logs.is_empty(), "{logs:?}");
+        assert_eq!(out, vec!["a if b".to_owned()]);
+    }
+
+    #[test]
+    fn continue_skips_the_rest_of_the_pass() {
+        let (out, logs) = said(
+            "\tloop 4 times:\n\t\tcontinue if loop-number is 2\n\t\tbroadcast \"n%loop-number%\"\n",
+        );
+        assert!(logs.is_empty(), "{logs:?}");
+        assert_eq!(out, vec!["n1", "n3", "n4"]);
+    }
+
+    #[test]
+    fn continue_the_second_loop_goes_to_the_outer_loop() {
+        let (out, logs) = said(
+            "\tloop 2 times:\n\t\tset {o} to loop-number\n\t\tloop 3 times:\n\t\t\tcontinue the 2nd loop\n\t\t\tbroadcast \"never\"\n\t\tbroadcast \"outer\"\n",
+        );
+        assert!(logs.is_empty(), "{logs:?}");
+        assert!(out.is_empty(), "{out:?}");
+    }
+
+    #[test]
+    fn a_failed_assert_is_a_run_error_with_its_message() {
+        let (_, logs) = said("\tassert 1 is 2 with error \"one is not two\"\n");
+        assert!(logs.iter().any(|l| l.contains("one is not two")), "{logs:?}");
+    }
+
+    #[test]
+    fn assert_to_fail_wants_a_false_condition() {
+        let (_, logs) = said("\tassert 1 is 2 to fail\n");
+        assert!(logs.is_empty(), "{logs:?}");
+        let (_, logs) = said("\tassert 1 is 1 to fail\n");
+        assert!(!logs.is_empty());
+    }
 }
