@@ -38,6 +38,15 @@ pub enum Value {
     /// An inventory slot of a player: the engine's slot number (0 to 42, see
     /// `PlayerState::inventory_slots`) and the player's uuid.
     Slot { owner: u128, index: u32 },
+    /// A potion effect type (`speed`): the vanilla id without `minecraft:`.
+    PotionEffectType(String),
+    /// A potion effect a living entity has: the vanilla id without `minecraft:`, its tier (the
+    /// amplifier plus one) and the time left in milliseconds (None when it lasts for ever).
+    PotionEffect {
+        id: String,
+        tier: i64,
+        duration: Option<i64>,
+    },
     List(Vec<Value>),
 }
 
@@ -69,6 +78,8 @@ impl Value {
             Value::EntityType(_) => "entity type",
             Value::Vector { .. } => "vector",
             Value::Slot { .. } => "slot",
+            Value::PotionEffectType(_) => "potion effect type",
+            Value::PotionEffect { .. } => "potion effect",
         }
     }
 
@@ -142,6 +153,10 @@ impl Value {
                 format_number(*z)
             ),
             Value::Slot { index, .. } => format!("slot {index}"),
+            Value::PotionEffectType(id) => classes::short_id(id).replace('_', " "),
+            Value::PotionEffect { id, tier, .. } => {
+                format!("{} of tier {tier}", classes::short_id(id).replace('_', " "))
+            }
             Value::List(items) => items
                 .iter()
                 .map(Value::to_text)

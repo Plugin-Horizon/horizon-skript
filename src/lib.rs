@@ -12,8 +12,8 @@
 pub mod horizon_skript_core;
 use crate::horizon_skript_core::Registry;
 use crate::horizon_skript_core::host::{
-    Actions, EntityInfo, Host as SkHost, ItemStack as SkItemStack, ParticleSpec, PlayerState, Vitals,
-    WorldInfo,
+    Actions, EntityInfo, Host as SkHost, ItemStack as SkItemStack, ParticleSpec, PlayerState,
+    PotionInfo, Vitals, WorldInfo,
 };
 use crate::horizon_skript_core::manager::{self, Manager};
 use crate::horizon_skript_core::run::Event;
@@ -497,9 +497,58 @@ impl SkHost for Bridge<'_> {
             })
         })
     }
+
+    // The active potion effects of a player or an NPC (`living_effects`): the vanilla id without the
+    // namespace, the amplifier and the ticks left (-1 is infinite).
+    fn potion_effects(&self, uuid: u128) -> Option<Vec<PotionInfo>> {
+        self.with(|h| {
+            let (_, e) = entity_with_dimension(h, uuid)?;
+            let effects = h.living(e)?.effects(&*h)?;
+            Some(
+                effects
+                    .into_iter()
+                    .map(|a| PotionInfo {
+                        id: h
+                            .effect_key_id(a.id)
+                            .trim_start_matches("minecraft:")
+                            .to_owned(),
+                        amplifier: a.amplifier,
+                        duration_ticks: a.duration,
+                    })
+                    .collect(),
+            )
+        })
+    }
 }
 
 impl Actions for Bridge<'_> {
+    // Removes one potion effect by its key (`living_remove_effect`), or all of them
+    // (`living_remove_all_effects`). An entity without the effect is not an error.
+    fn remove_potion_effect(&self, uuid: u128, effect: Option<&str>) -> bool {
+        self.with(|h| {
+            let Some((_, e)) = entity_with_dimension(h, uuid) else {
+                return false;
+            };
+            let Some(living) = h.living(e) else {
+                return false;
+            };
+            match effect {
+                None => {
+                    living.remove_all_effects(h);
+                    true
+                }
+                Some(id) => match h.effect_key(&format!("minecraft:{id}")) {
+                    Some(key) => {
+                        living.remove_effect(h, key);
+                        true
+                    }
+                    None => false,
+                },
+            }
+        })
+    }
+
+    // The engine's inventory write by slot number, for online players (`Inventory.setItem`). The
     fn run_console(&self, line: &str) -> bool {
         self.with(|h| run_console_line(h, line))
     }

@@ -8,7 +8,8 @@
 //! `remove %object% from %object%`. Such an effect hands the text it does not own to the builtin.
 
 mod console;
-mod entities;
+pub(crate) mod entities;
+mod potions;
 mod items;
 mod messages;
 mod particles;
@@ -43,6 +44,7 @@ pub fn register(reg: &mut Registry) -> Result<(), PatternError> {
     sorting::register(reg)?;
     vitals::register(reg)?;
     slots::register(reg)?;
+    potions::register(reg)?;
     Ok(())
 }
 

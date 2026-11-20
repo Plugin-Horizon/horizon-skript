@@ -20,6 +20,8 @@ pub const CLASS_NAMES: &[&str] = &[
     "entity type",
     "vector",
     "slot",
+    "potion effect type",
+    "potion effect",
 ];
 
 /// Classes beyond the core ones: entities, command senders, UUIDs, colours.

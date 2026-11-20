@@ -203,6 +203,11 @@ pub trait Host {
     fn equipment(&self, _uuid: u128, _slot: &str) -> Option<ItemStack> {
         None
     }
+    /// The potion effects a player or an entity has now (`potion effects of`); None for one that
+    /// is not online or is not living.
+    fn potion_effects(&self, _uuid: u128) -> Option<Vec<PotionInfo>> {
+        None
+    }
     /// Appends a line to a log file of the scripts' log folder (`log "x" to file "name"`), by the
     /// file's name without folders. False when the host cannot write it.
     fn append_log(&self, _file: &str, _line: &str) -> bool {
@@ -378,11 +383,26 @@ pub trait Actions {
     fn set_respawn(&self, _uuid: u128, _at: &Location) -> bool {
         false
     }
+    /// Removes one potion effect (vanilla id without `minecraft:`) from a player or an entity, or
+    /// all of them with `None`. False when the engine refuses it; an entity without the effect is
+    /// not an error.
+    fn remove_potion_effect(&self, _uuid: u128, _effect: Option<&str>) -> bool {
+        false
+    }
     /// Puts a stack (`Some`) or nothing (`None`) into a numbered inventory slot of a player (the
     /// numbers of [`PlayerState::inventory_slots`]). False when the engine refuses it.
     fn set_inventory_slot(&self, _uuid: u128, _slot: u32, _stack: Option<&ItemStack>) -> bool {
         false
     }
+}
+
+/// One potion effect a player or an entity has (what `potion_effects` returns): the vanilla id
+/// without `minecraft:`, the amplifier (tier minus one) and the ticks left (-1 is infinite).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PotionInfo {
+    pub id: String,
+    pub amplifier: i32,
+    pub duration_ticks: i32,
 }
 
 /// The actions of a host that has none.
@@ -426,6 +446,8 @@ pub struct Recorder {
     pub biomes: Vec<(Location, String)>,
     /// Pairs (looker, target) with a line of sight; any other pair has none.
     pub sight: Vec<(u128, u128)>,
+    /// Potion effects by UUID (what `potion_effects` returns).
+    pub potions: Vec<(u128, Vec<PotionInfo>)>,
 }
 
 impl Recorder {
@@ -529,6 +551,12 @@ impl Host for Recorder {
             .iter()
             .find(|(u, s, _)| *u == uuid && s == slot)
             .map(|(_, _, item)| item.clone())
+    }
+    fn potion_effects(&self, uuid: u128) -> Option<Vec<PotionInfo>> {
+        self.potions
+            .iter()
+            .find(|(u, _)| *u == uuid)
+            .map(|(_, effects)| effects.clone())
     }
 }
 
@@ -719,6 +747,13 @@ impl Actions for Recorder {
             "respawn {uuid} {}",
             crate::horizon_skript_core::value::Value::Location(at.clone()).to_text()
         ));
+        true
+    }
+    fn remove_potion_effect(&self, uuid: u128, effect: Option<&str>) -> bool {
+        let what = effect.unwrap_or("all");
+        self.acted
+            .borrow_mut()
+            .push(format!("potion {uuid} remove {what}"));
         true
     }
     fn set_inventory_slot(&self, uuid: u128, slot: u32, stack: Option<&ItemStack>) -> bool {

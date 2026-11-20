@@ -9,6 +9,7 @@ pub mod misc;
 pub mod more2;
 pub mod more3;
 pub mod player;
+pub mod potions;
 pub mod slots;
 pub mod text;
 pub mod vectors;
@@ -33,5 +34,6 @@ pub fn register(reg: &mut Registry) -> Result<(), PatternError> {
     vitals::register(reg)?;
     vectors::register(reg)?;
     slots::register(reg)?;
+    potions::register(reg)?;
     Ok(())
 }
