@@ -11,6 +11,7 @@ use crate::horizon_skript_core::pattern::{Match, SlotSpec};
 use crate::horizon_skript_core::registry::{Condition, Effect, Flow, Matched, Registry};
 use crate::horizon_skript_core::run::Ctx;
 use crate::horizon_skript_core::script::{self, Item, Line};
+use crate::horizon_skript_core::syntax::effects::sorting::{SortBy, Transform};
 use crate::horizon_skript_core::value::Value;
 use std::sync::Arc;
 
@@ -750,6 +751,52 @@ impl Reader<'_> {
                 m: Matched::default(),
                 line,
             });
+        }
+        if let Some(rest) = strip_ci(text, "sort ") {
+            let (head, by) = match find_outside_quotes(rest, " by ")
+                .or_else(|| find_outside_quotes(rest, " based on "))
+            {
+                Some((pos, len)) => (rest[..pos].trim(), rest[pos + len..].trim()),
+                None => ("", ""),
+            };
+            if !by.is_empty() {
+                let lower = head.to_ascii_lowercase();
+                let (head, descending) = if let Some(h) = lower.strip_suffix(" in descending order") {
+                    (&head[..h.len()], true)
+                } else if let Some(h) = lower.strip_suffix(" in ascending order") {
+                    (&head[..h.len()], false)
+                } else {
+                    (head, false)
+                };
+                if let (Some(target), Some(mapping)) =
+                    (self.parser.list(head.trim(), &[]), self.parser.expr(by, &[]))
+                {
+                    return Some(Node::Effect {
+                        handler: Arc::new(SortBy {
+                            target,
+                            mapping,
+                            descending,
+                        }),
+                        m: Matched::default(),
+                        line,
+                    });
+                }
+            }
+        }
+        if let Some(rest) = strip_ci(text, "transform ").or_else(|| strip_ci(text, "map ")) {
+            let at = find_outside_quotes(rest, " using ").or_else(|| find_outside_quotes(rest, " with "));
+            if let Some((pos, len)) = at {
+                if let (Some(target), Some(mapping)) = (
+                    self.parser.list(rest[..pos].trim(), &[]),
+                    self.parser.expr(rest[pos + len..].trim(), &[]),
+                ) {
+                    return Some(Node::Effect {
+                        handler: Arc::new(Transform { target, mapping }),
+                        m: Matched::default(),
+                        line,
+                    });
+                }
+            }
         }
         let mut from = 0;
         while let Some((pos, len)) = find_outside_quotes(&text[from..], " if ") {

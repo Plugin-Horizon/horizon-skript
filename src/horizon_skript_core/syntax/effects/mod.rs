@@ -16,7 +16,7 @@ mod place;
 mod player_state;
 mod players;
 mod server;
-mod sorting;
+pub(crate) mod sorting;
 mod variables;
 mod world;
 
