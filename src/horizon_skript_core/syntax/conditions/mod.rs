@@ -7,6 +7,7 @@ pub mod misc;
 pub mod more;
 pub mod more2;
 pub mod player;
+pub mod vitals;
 
 use crate::horizon_skript_core::pattern::PatternError;
 use crate::horizon_skript_core::registry::Registry;
@@ -19,5 +20,6 @@ pub fn register(reg: &mut Registry) -> Result<(), PatternError> {
     misc::register(reg)?;
     more::register(reg)?;
     more2::register(reg)?;
+    vitals::register(reg)?;
     Ok(())
 }
