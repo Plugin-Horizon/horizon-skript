@@ -89,6 +89,9 @@ fn log(line: &str) {
 struct Bridge<'a> {
     host: RefCell<&'a mut dyn ServerHost>,
     level_name: String,
+    /// Script enable/reload/disable/unload requests of the running triggers, applied once the
+    /// manager is free again (`with_manager`).
+    script_requests: RefCell<Vec<(String, String)>>,
 }
 
 impl<'a> Bridge<'a> {
@@ -153,6 +156,13 @@ impl SkHost for Bridge<'_> {
 
     // `log "x" to file "name"`: one line appended to plugins/Skript/logs/<name>. The core already
     // refused names with folders; this checks again before touching the disk.
+    fn script_action(&self, action: &str, name: &str) -> bool {
+        self.script_requests
+            .borrow_mut()
+            .push((action.to_owned(), name.to_owned()));
+        true
+    }
+
     fn append_log(&self, file: &str, line: &str) -> bool {
         use std::io::Write;
         if file.is_empty() || file.contains(['/', '\\']) || file.contains("..") {
@@ -848,6 +858,7 @@ impl Skript {
         let bridge = Bridge {
             host: RefCell::new(host),
             level_name: st.level_name.clone(),
+            script_requests: RefCell::new(Vec::new()),
         };
         if st.manager.is_none() {
             let folder = st
@@ -861,6 +872,25 @@ impl Skript {
         // The manager is taken out while `f` runs, so `f` may also look at the state.
         let mut m = st.manager.take().expect("set above");
         let out = f(&mut *st, &mut m, &bridge);
+        for (action, name) in bridge.script_requests.take() {
+            match action.as_str() {
+                "reload" => {
+                    for line in m.reload(&bridge, &name) {
+                        log(&line);
+                    }
+                }
+                "enable" => {
+                    if let Err(e) = m.enable(&bridge, &name) {
+                        log(&e);
+                    }
+                }
+                _ => {
+                    if let Err(e) = m.disable(&bridge, &name) {
+                        log(&e);
+                    }
+                }
+            }
+        }
         st.manager = Some(m);
         out
     }

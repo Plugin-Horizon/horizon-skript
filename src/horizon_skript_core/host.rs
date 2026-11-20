@@ -139,6 +139,12 @@ pub trait Host {
     fn append_log(&self, _file: &str, _line: &str) -> bool {
         false
     }
+    /// Asks the glue to `enable`, `reload`, `disable` or `unload` a script by name. The glue does
+    /// it once the running trigger is done (the manager is busy while a script runs). False when
+    /// the host cannot.
+    fn script_action(&self, _action: &str, _name: &str) -> bool {
+        false
+    }
     /// A pseudo-random number in `[0, 1)`. The default seeds from the standard library's random
     /// state; the glue may use the engine's generator instead.
     fn random_unit(&self) -> f64 {
@@ -375,6 +381,10 @@ impl Host for Recorder {
             .iter()
             .find(|(u, _)| *u == uuid)
             .map(|(_, s)| s.clone())
+    }
+    fn script_action(&self, action: &str, name: &str) -> bool {
+        self.acted.borrow_mut().push(format!("script {action} {name}"));
+        true
     }
     fn append_log(&self, file: &str, line: &str) -> bool {
         self.acted.borrow_mut().push(format!("logfile {file} {line}"));

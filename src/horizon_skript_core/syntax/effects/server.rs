@@ -51,7 +51,39 @@ pub(super) fn register(reg: &mut Registry) -> Result<(), PatternError> {
         0,
         wait_for,
     )?;
+    reg.add_effect(
+        "script file",
+        &[
+            "(1¦(enable|load)|2¦reload|3¦disable|4¦unload) script [file|named] %text% [print:with errors]",
+            "(1¦(enable|load)|2¦reload|3¦disable|4¦unload) skript file %text% [print:with errors]",
+        ],
+        -1,
+        script_file,
+    )?;
     Ok(())
+}
+
+/// `reload script "name"` and the others: the glue does it when the running trigger is done.
+/// Skript's `unload` and `disable` both switch the script off here.
+fn script_file(cx: &mut Ctx<'_>, m: &Matched) -> Result<Flow, RunError> {
+    let action = if m.has_mark(1) {
+        "enable"
+    } else if m.has_mark(2) {
+        "reload"
+    } else if m.has_mark(3) {
+        "disable"
+    } else {
+        "unload"
+    };
+    for name in texts_in(cx, m, 0)? {
+        if name.contains(['/', '\\']) || name.contains("..") {
+            return Err(RunError::new(format!("the script '{name}' must not name a folder")));
+        }
+        if !cx.host.script_action(action, &name) {
+            return Err(RunError::new("this server cannot change scripts from a script"));
+        }
+    }
+    next()
 }
 
 fn stop_server(cx: &mut Ctx<'_>, _: &Matched) -> Result<Flow, RunError> {
@@ -103,6 +135,32 @@ fn wait_for(cx: &mut Ctx<'_>, m: &Matched) -> Result<Flow, RunError> {
 mod tests {
     use crate::horizon_skript_core::host::Recorder;
     use crate::horizon_skript_core::syntax::support::testing::{acted, run};
+
+    #[test]
+    fn script_effects_ask_the_host() {
+        let host = Recorder::default();
+        let logs = run(
+            &host,
+            "\treload script \"lobby\"\n\tdisable script \"old\"\n\tenable script file \"new\"\n\tunload skript file \"x.sk\"\n",
+        );
+        assert!(logs.is_empty(), "{logs:?}");
+        assert_eq!(
+            acted(&host),
+            vec![
+                "script reload lobby",
+                "script disable old",
+                "script enable new",
+                "script unload x.sk"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_script_path_with_a_folder_is_refused() {
+        let host = Recorder::default();
+        let logs = run(&host, "\treload script \"../x\"\n");
+        assert!(logs.iter().any(|l| l.contains("folder")), "{logs:?}");
+    }
 
     #[test]
     fn server_commands() {
