@@ -182,6 +182,8 @@ pub fn accepts(want: &str, have: &str) -> bool {
             "entity" => matches!(have, "player" | "entity type"),
             "commandsender" => matches!(have, "player" | "text"),
             "uuid" => have == "text",
+            // A text literal (`"2000-01-01"`, `"world"`) is read as a date or a world when it runs (`convert`).
+            "date" | "world" => have == "text",
             w => is_enum(w) && have == "text",
         }
 }

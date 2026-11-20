@@ -112,8 +112,21 @@ impl Pattern {
         } else {
             vec![Raw::Alt(alts)]
         };
-        let variants =
+        let mut variants =
             expand(&seq).ok_or_else(|| err(format!("more than {MAX_VARIANTS} variants")))?;
+        // A space left at the end by absent optional parts (`drop %x% [at %y%] [without velocity]`)
+        // is not part of the text a statement ends with.
+        for v in &mut variants {
+            while let Some(Flat::Lit(l)) = v.last_mut() {
+                let trimmed = l.trim_end_matches(' ').len();
+                l.truncate(trimmed);
+                if l.is_empty() {
+                    v.pop();
+                } else {
+                    break;
+                }
+            }
+        }
         Ok(Pattern {
             source: source.to_owned(),
             variants,
@@ -208,15 +221,19 @@ impl Parser {
                     // a word (after a space, `(` or `|`, or at the start) may take it.
                     let idx = self.pos - 1;
                     let word_start =
-                        idx == 0 || matches!(self.chars.get(idx - 1), Some(' ' | '(' | '|'));
+                        idx == 0 || matches!(self.chars.get(idx - 1), Some(' ' | '(' | '|' | '['));
                     flush(&mut buf, &mut cur);
                     let mut inner = self.parse_alts(Some(']'))?;
                     let after = self.chars.get(self.pos) == Some(&' ') && (before || word_start);
                     if after {
                         self.pos += 1;
                     }
+                    // A part after a space and glued to what follows (`[in]to`, `[(a|b) ](x|y)`) leaves the
+                    // space behind when it is absent: `copy %x% [in]to %y%` matches `copy a to b`.
+                    let glued_next = !after
+                        && matches!(self.chars.get(self.pos), Some(c) if !matches!(c, ' ' | ')' | ']' | '|' | '['));
                     let mut absent = Vec::new();
-                    if before && after {
+                    if before && (after || glued_next) {
                         absent.push(Raw::Lit(" ".to_owned()));
                     }
                     for alt in &mut inner {

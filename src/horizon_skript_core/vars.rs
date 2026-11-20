@@ -116,14 +116,23 @@ impl Variables {
         }
     }
 
-    /// Values below a list name (`{x::*}` is `values_below("x")`), in key order.
+    /// Values below a list name (`{x::*}` is `values_below("x")`), in key order: numeric keys by value
+    /// (`2` before `10`, as Skript sorts them), then the other keys as text.
     pub fn values_below(&self, base: &str) -> Vec<Value> {
         let below = format!("{}::", self.key(base));
-        self.map
+        let mut rows: Vec<(&str, &Value)> = self
+            .map
             .range(below.clone()..)
             .take_while(|(k, _)| k.starts_with(&below))
-            .map(|(_, v)| v.clone())
-            .collect()
+            .map(|(k, v)| (&k[below.len()..], v))
+            .collect();
+        rows.sort_by(|(a, _), (b, _)| match (a.parse::<f64>(), b.parse::<f64>()) {
+            (Ok(x), Ok(y)) => x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal),
+            (Ok(_), Err(_)) => std::cmp::Ordering::Less,
+            (Err(_), Ok(_)) => std::cmp::Ordering::Greater,
+            (Err(_), Err(_)) => a.cmp(b),
+        });
+        rows.into_iter().map(|(_, v)| v.clone()).collect()
     }
 
     /// The next free integer index of a list (`1` for an empty list).
