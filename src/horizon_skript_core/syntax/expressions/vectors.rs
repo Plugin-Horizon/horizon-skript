@@ -7,14 +7,19 @@
 //! `ExprVectorProjection`, `ExprVectorOfLocation`, `ExprVectorBetweenLocations`,
 //! `ExprVectorFromYawAndPitch` and `CondIsVectorNormalized`.
 //!
+//! Round 9 adds the random vector (`ExprVectorRandom`), the spherical and cylindrical vectors
+//! (`ExprVectorSpherical`, `ExprVectorCylindrical`), the vector of a location's look direction
+//! (`ExprVectorFromDirection`, the `vector in direction of` form only) and the component setters
+//! (`set x component of`, `add`, `remove`, as `ExprXYZComponent` changes).
+//!
 //! Differences from Skript: the vector arithmetic (`+ - * /`) is in `expr.rs`. The bare `x of
 //! %vector%` form is not registered (the location coordinate owns `x of`, and it does not read a
-//! vector); `x component of` is. Not ported: random, spherical and cylindrical vectors, and the
-//! vector of a direction (it needs the location direction).
+//! vector); `x component of` is. Not ported: the `direction` values (`upwards`, `north`, ...), so
+//! `vector from direction` takes only `direction of` a location or player.
 
 use crate::horizon_skript_core::error::RunError;
 use crate::horizon_skript_core::pattern::PatternError;
-use crate::horizon_skript_core::registry::{Matched, Registry};
+use crate::horizon_skript_core::registry::{Change, ExprSyntax, Matched, Registry};
 use crate::horizon_skript_core::run::Ctx;
 use crate::horizon_skript_core::syntax::support::{location_at, negated, num, number_of, slot};
 use crate::horizon_skript_core::value::Value;
@@ -65,17 +70,162 @@ fn vector_xyz(cx: &mut Ctx<'_>, m: &Matched) -> Result<Value, RunError> {
     Ok(Value::Vector { x, y, z })
 }
 
-/// `x component of %vector%` (marks 1, 2, 3 for x, y, z).
-fn component(cx: &mut Ctx<'_>, m: &Matched) -> Result<Value, RunError> {
-    let (x, y, z) = first(cx, m)?;
-    let v = if m.has_mark(1) {
-        x
+/// The axis of a `x|y|z component` pattern: 0, 1 or 2 (marks 1, 2, 3).
+fn axis_of(m: &Matched) -> usize {
+    if m.has_mark(1) {
+        0
     } else if m.has_mark(2) {
-        y
+        1
     } else {
-        z
+        2
+    }
+}
+
+fn pick(axis: usize, (x, y, z): (f64, f64, f64)) -> f64 {
+    match axis {
+        0 => x,
+        1 => y,
+        _ => z,
+    }
+}
+
+fn with_axis(axis: usize, (x, y, z): (f64, f64, f64), v: f64) -> (f64, f64, f64) {
+    match axis {
+        0 => (v, y, z),
+        1 => (x, v, z),
+        _ => (x, y, v),
+    }
+}
+
+/// `x|y|z component of %vector%`. Reading gives the component. A change (`set`, `add`, `remove`)
+/// writes a new vector back into the expression, as Skript's `ExprXYZComponent` does, so it works
+/// on a variable (`set x component of {_v} to 1`) and on a syntax expression that can be changed.
+struct Component;
+
+impl ExprSyntax for Component {
+    fn eval(&self, cx: &mut Ctx<'_>, m: &Matched) -> Result<Value, RunError> {
+        let v = first(cx, m)?;
+        Ok(num(pick(axis_of(m), v)))
+    }
+
+    fn change(
+        &self,
+        cx: &mut Ctx<'_>,
+        m: &Matched,
+        how: Change,
+        by: &Value,
+    ) -> Option<Result<(), RunError>> {
+        Some(write_component(cx, m, how, by))
+    }
+}
+
+fn write_component(
+    cx: &mut Ctx<'_>,
+    m: &Matched,
+    how: Change,
+    by: &Value,
+) -> Result<(), RunError> {
+    let axis = axis_of(m);
+    let current = first(cx, m)?;
+    let amount = number_of(by)?;
+    let old = pick(axis, current);
+    let new = match how {
+        Change::Set => amount,
+        Change::Add => old + amount,
+        Change::Remove => old - amount,
     };
-    Ok(num(v))
+    let (x, y, z) = with_axis(axis, current, new);
+    let out = Value::Vector { x, y, z };
+    let target = m
+        .expr(0)
+        .ok_or_else(|| RunError::new("the vector to change is missing"))?;
+    match target.var_name(cx)? {
+        Some(name) => {
+            if name.starts_with('_') {
+                (&mut *cx.locals).set(&name, out);
+            } else {
+                (&mut *cx.vars).set(&name, out);
+            }
+            Ok(())
+        }
+        None => match target.change(cx, Change::Set, &out) {
+            Some(r) => r,
+            None => Err(RunError::new("that vector can't be changed")),
+        },
+    }
+}
+
+/// A unit vector from three standard normal numbers: the direction is uniform on the sphere.
+/// A zero vector (no chance in practice) stays zero.
+fn unit_vector((x, y, z): (f64, f64, f64)) -> Value {
+    let len = length_of((x, y, z));
+    if len == 0.0 {
+        return Value::Vector { x: 0.0, y: 0.0, z: 0.0 };
+    }
+    Value::Vector {
+        x: x / len,
+        y: y / len,
+        z: z / len,
+    }
+}
+
+/// `[a] random vector`: three Gaussian numbers from the host's uniform numbers (Box-Muller), as
+/// Skript's `ExprVectorRandom` samples, then normalized.
+fn random(cx: &mut Ctx<'_>, _m: &Matched) -> Result<Value, RunError> {
+    let host = cx.host;
+    let mut normal = || {
+        let u1 = host.random_unit().max(f64::MIN_POSITIVE);
+        let u2 = host.random_unit();
+        (-2.0 * u1.ln()).sqrt() * (std::f64::consts::TAU * u2).cos()
+    };
+    let v = (normal(), normal(), normal());
+    Ok(unit_vector(v))
+}
+
+/// Skript's yaw (`ExprYawPitch.fromSkriptYaw`): its zero is 90 degrees of the vanilla yaw.
+fn from_skript_yaw(yaw: f64) -> f64 {
+    if yaw > 270.0 { yaw - 270.0 } else { yaw + 90.0 }
+}
+
+/// `Skript`'s spherical shape: the radius's magnitude, the Skript yaw and the pitch from the top
+/// (`pitch + 90`), as `ExprVectorSpherical.fromSphericalCoordinates`.
+fn spherical_of(radius: f64, yaw: f64, pitch: f64) -> (f64, f64, f64) {
+    let r = radius.abs();
+    let t = from_skript_yaw(yaw).to_radians();
+    let p = (pitch + 90.0).to_radians();
+    (r * p.sin() * t.cos(), r * p.cos(), r * p.sin() * t.sin())
+}
+
+/// `cylindrical shape`: the radius's magnitude and Skript yaw around the y axis, at a height.
+fn cylindrical_of(radius: f64, yaw: f64, height: f64) -> (f64, f64, f64) {
+    let r = radius.abs();
+    let p = from_skript_yaw(yaw).to_radians();
+    (r * p.cos(), height, r * p.sin())
+}
+
+/// `[a] [new] spherical vector [from|with] [radius] %number%, [yaw] %number% and [pitch] %number%`.
+fn spherical(cx: &mut Ctx<'_>, m: &Matched) -> Result<Value, RunError> {
+    let radius = number_of(&slot(cx, m, 0)?)?;
+    let yaw = number_of(&slot(cx, m, 1)?)?;
+    let pitch = number_of(&slot(cx, m, 2)?)?;
+    let (x, y, z) = spherical_of(radius, yaw, pitch);
+    Ok(Value::Vector { x, y, z })
+}
+
+/// `[a] [new] cylindrical vector [from|with] [radius] %number%, [yaw] %number% and [height] %number%`.
+fn cylindrical(cx: &mut Ctx<'_>, m: &Matched) -> Result<Value, RunError> {
+    let radius = number_of(&slot(cx, m, 0)?)?;
+    let yaw = number_of(&slot(cx, m, 1)?)?;
+    let height = number_of(&slot(cx, m, 2)?)?;
+    let (x, y, z) = cylindrical_of(radius, yaw, height);
+    Ok(Value::Vector { x, y, z })
+}
+
+/// `vector in direction of %location%`: the look direction of a location or a player (its yaw and
+/// pitch as the vector from yaw and pitch).
+fn look_direction(cx: &mut Ctx<'_>, m: &Matched) -> Result<Value, RunError> {
+    let at = location_at(cx, m, 0)?;
+    Ok(from_yaw_pitch(f64::from(at.yaw), f64::from(at.pitch)))
 }
 
 /// `(vector|standard|normal) length of %vector%`.
@@ -220,7 +370,35 @@ pub fn register(reg: &mut Registry) -> Result<(), PatternError> {
         &["(1¦x|2¦y|3¦z) component[s] of %vector%"],
         0,
         "number",
-        component,
+        Component,
+    )?;
+    reg.add_expression(
+        "random vector",
+        &["[a] random vector"],
+        0,
+        "vector",
+        random,
+    )?;
+    reg.add_expression(
+        "spherical vector",
+        &["[a] [new] spherical vector [(from|with)] [radius] %number%, [yaw] %number%(,| and) [pitch] %number%"],
+        0,
+        "vector",
+        spherical,
+    )?;
+    reg.add_expression(
+        "cylindrical vector",
+        &["[a] [new] cylindrical vector [(from|with)] [radius] %number%, [yaw] %number%(,| and) [height] %number%"],
+        0,
+        "vector",
+        cylindrical,
+    )?;
+    reg.add_expression(
+        "vector from direction",
+        &["[a] vector (in|from) direction of %location/player%"],
+        0,
+        "vector",
+        look_direction,
     )?;
     reg.add_expression(
         "vector length",
@@ -296,7 +474,9 @@ pub fn register(reg: &mut Registry) -> Result<(), PatternError> {
 
 #[cfg(test)]
 mod tests {
+    use super::{cylindrical_of, spherical_of, unit_vector};
     use crate::horizon_skript_core::host::Recorder;
+    use crate::horizon_skript_core::syntax::support::testing::run as run_script;
     use crate::horizon_skript_core::syntax::support::testing::{expr, run};
 
     fn fresh() -> Recorder {
@@ -390,6 +570,39 @@ mod tests {
         assert_eq!(expr(&fresh(), "2 * vector 1, 2, 3"), "x: 2, y: 4, z: 6");
         assert_eq!(expr(&fresh(), "vector 2, 4, 6 / 2"), "x: 1, y: 2, z: 3");
         assert_eq!(expr(&fresh(), "vector 2, 4, 6 * vector 1, 0.5, 2"), "x: 2, y: 2, z: 12");
+    }
+
+    #[test]
+    fn spherical_and_cylindrical_shapes() {
+        let (x, y, z) = spherical_of(2.0, 0.0, -90.0);
+        assert!(x.abs() < 1e-12 && z.abs() < 1e-12, "{x} {z}");
+        assert_eq!(y, 2.0);
+        let (x, y, z) = cylindrical_of(1.0, 0.0, 2.0);
+        assert!(x.abs() < 1e-12, "{x}");
+        assert_eq!((y, z), (2.0, 1.0));
+    }
+
+    #[test]
+    fn unit_vectors_from_normal_numbers() {
+        assert_eq!(
+            unit_vector((3.0, 4.0, 0.0)).to_text(),
+            "x: 0.6, y: 0.8, z: 0"
+        );
+        assert_eq!(
+            unit_vector((0.0, 0.0, 0.0)).to_text(),
+            "x: 0, y: 0, z: 0"
+        );
+    }
+
+    #[test]
+    fn components_are_changed_in_place() {
+        let h = fresh();
+        let logs = run_script(
+            &h,
+            "\tset {_v} to vector 1, 2, 3\n\tset x component of {_v} to 5\n\tadd 1 to y component of {_v}\n\tbroadcast \"%{_v}%\"\n",
+        );
+        assert!(logs.is_empty(), "{logs:?}");
+        assert_eq!(h.broadcasts.borrow()[0], "x: 5, y: 3, z: 3");
     }
 
     #[test]
